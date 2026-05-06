@@ -24,26 +24,34 @@ class SingletonLogger:
             return cls._instance
 
     def _initialize_logger(self):
-        log_file_path = "logs/app.log"
-        os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
-
         self.logger = logging.getLogger("SingletonLogger")
         self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False
 
-        # Avoid duplicate handlers
-        if not self.logger.handlers:
-            stream_handler = logging.StreamHandler()
-            stream_handler.setLevel(logging.DEBUG)
+        if self.logger.handlers:
+            return
 
+        formatter = JsonFormatter()
+
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(logging.DEBUG)
+        stream_handler.setFormatter(formatter)
+        self.logger.addHandler(stream_handler)
+
+        # Vercel production filesystem is read-only. File logging only works in /tmp.
+        log_dir = os.getenv("LOG_DIR", "/tmp/logs")
+        log_file_path = os.path.join(log_dir, "app.log")
+
+        try:
+            os.makedirs(log_dir, exist_ok=True)
             file_handler = logging.FileHandler(filename=log_file_path, mode="a")
             file_handler.setLevel(logging.DEBUG)
-
-            formatter = JsonFormatter()
-            stream_handler.setFormatter(formatter)
             file_handler.setFormatter(formatter)
-
-            self.logger.addHandler(stream_handler)
             self.logger.addHandler(file_handler)
+        except OSError:
+            self.logger.warning(
+                "File logging disabled because filesystem is read-only."
+            )
 
 
 class JsonFormatter(logging.Formatter):
