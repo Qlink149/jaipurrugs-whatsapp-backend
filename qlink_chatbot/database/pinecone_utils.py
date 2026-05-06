@@ -12,11 +12,37 @@ from qlink_chatbot.utils.logger_config import logger
 
 load_dotenv()
 
-pinecone_api = os.getenv("PINECONE_API") or os.getenv("PINECONE_API_KEY")
-openai_api_key = os.getenv("OPENAI_API_KEY")
+def _clean_env(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+pinecone_api = _clean_env("PINECONE_API") or _clean_env("PINECONE_API_KEY")
+openai_api_key = _clean_env("OPENAI_API_KEY")
 pine_client = Pinecone(api_key=pinecone_api) if pinecone_api else None
 openai_client = OpenAI(api_key=openai_api_key) if openai_api_key else None
-index = pine_client.Index("demo") if pine_client else None
+index = None
+
+
+def get_index():
+    global index
+
+    if index is not None:
+        return index
+
+    if not pine_client:
+        return None
+
+    try:
+        index = pine_client.Index("demo")
+    except Exception as exc:
+        logger.error(f"[Pinecone] Failed to initialize index: {exc}")
+        return None
+
+    return index
 
 def get_embedding(text:str):
     if not openai_client:
@@ -41,11 +67,12 @@ def fetch_kb(
 ) -> list:
     """Pinecone util function to perform similarity search in the db."""
     try:
-        if not index:
+        pine_index = get_index()
+        if not pine_index:
             logger.warning("[Pinecone] PINECONE_API/PINECONE_API_KEY is not configured.")
             return []
 
-        result = index.query(
+        result = pine_index.query(
             namespace=pinecone_kb_namespace,
             vector=vector,
             top_k=top_k,
@@ -65,10 +92,11 @@ def upsert_kb(
 ) -> None:
     """Pinecone Util Function to append new vector to the db."""
     try:
-        if not index:
+        pine_index = get_index()
+        if not pine_index:
             logger.warning("[Pinecone] PINECONE_API/PINECONE_API_KEY is not configured.")
             return None
-        index.upsert(
+        pine_index.upsert(
             namespace=pinecone_kb_namespace,
             vectors=[
                 {
@@ -137,13 +165,14 @@ async def store_vector_summary(session_id: str, summary: str, lable = "agent"):
 def list_records_by_label(lable: str, namespace: str = pinecone_kb_namespace):
     """Fetch all records in the given namespace filtered by label (agent/general)."""
     try:
-        if not index:
+        pine_index = get_index()
+        if not pine_index:
             logger.warning("[Pinecone] PINECONE_API/PINECONE_API_KEY is not configured.")
             return None
         meta_response = None
-        response = list(index.list(namespace=namespace))
+        response = list(pine_index.list(namespace=namespace))
         if response:
-            m_respose = index.fetch(
+            m_respose = pine_index.fetch(
                 ids=response[0], 
                 namespace=namespace
             )
@@ -171,10 +200,11 @@ def list_records_by_label(lable: str, namespace: str = pinecone_kb_namespace):
 def get_record_by_id(record_id: str, namespace: str = pinecone_kb_namespace):
     """Fetch a specific record and its metadata from Pinecone."""
     try:
-        if not index:
+        pine_index = get_index()
+        if not pine_index:
             logger.warning("[Pinecone] PINECONE_API/PINECONE_API_KEY is not configured.")
             return None
-        m_response = index.fetch(ids=[record_id], namespace=namespace)
+        m_response = pine_index.fetch(ids=[record_id], namespace=namespace)
         vectors = m_response.vectors
 
         if not vectors or record_id not in vectors:
@@ -197,10 +227,11 @@ def get_record_by_id(record_id: str, namespace: str = pinecone_kb_namespace):
 def delete_record_by_id(record_id: str, namespace: str = pinecone_kb_namespace):
     """Delete a record from Pinecone namespace by its ID."""
     try:
-        if not index:
+        pine_index = get_index()
+        if not pine_index:
             logger.warning("[Pinecone] PINECONE_API/PINECONE_API_KEY is not configured.")
             return None
-        index.delete(ids=[record_id], namespace=namespace)
+        pine_index.delete(ids=[record_id], namespace=namespace)
         logger.info(f"[Pinecone] Record deleted successfully {record_id} from KB.")
     except Exception as e:
         logger.error(f"[Pinecone] Error deleting records: {e}")
