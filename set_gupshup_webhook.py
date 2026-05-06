@@ -76,6 +76,11 @@ def get_app_token(app_id: str) -> str:
     if explicit_app_token:
         return explicit_app_token
 
+    # Some projects already store the Gupshup app token in GUPSHUP_TOKEN.
+    legacy_app_token = (os.environ.get("GUPSHUP_TOKEN") or "").strip()
+    if legacy_app_token:
+        return legacy_app_token
+
     partner_token = get_partner_token()
     response = requests.get(
         f"{PARTNER_BASE_URL}/partner/app/{app_id}/token",
