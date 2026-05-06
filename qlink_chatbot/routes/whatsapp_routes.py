@@ -22,22 +22,31 @@ def _extract_event(request_data: dict) -> dict:
 
 
 def _extract_gupshup_message(request_data: dict) -> dict:
-    """Return a normalized inbound message from Gupshup v2 callbacks."""
-    if request_data.get("type") != "message":
+    """Return a normalized inbound message from Gupshup callbacks."""
+    event_type = request_data.get("type")
+    if event_type and event_type != "message":
         return {}
 
     payload = request_data.get("payload") or {}
-    message_type = payload.get("type", "")
-    content = payload.get("payload") or {}
+    if not payload and request_data.get("source") and request_data.get("type"):
+        payload = request_data
+    message_type = (payload.get("type") or request_data.get("payload", {}).get("type") or "").strip()
+    content = payload.get("payload")
+    if not isinstance(content, dict):
+        content = payload
 
     text = ""
-    if message_type == "text":
+    if message_type in {"text", "txt"}:
         text = content.get("text", "")
-    elif message_type in {"button_reply", "list_reply"}:
-        text = content.get("title") or content.get("text") or content.get("postbackText", "")
+    elif message_type in {"button_reply", "list_reply", "button"}:
+        text = (
+            content.get("title")
+            or content.get("text")
+            or content.get("postbackText", "")
+        )
 
     return {
-        "from": payload.get("source", ""),
+        "from": payload.get("source", "") or payload.get("sender", {}).get("phone", ""),
         "text": (text or "").strip(),
         "name": (payload.get("sender") or {}).get("name", ""),
     }
