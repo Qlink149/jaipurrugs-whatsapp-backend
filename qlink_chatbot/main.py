@@ -15,6 +15,26 @@ from qlink_chatbot.routes.ws_routes import (
 )
 from qlink_chatbot.utils.logger_config import logger
 
+DEFAULT_CORS_ORIGINS = [
+    "https://jaipurrugs-bot.vercel.app",
+    "https://jaipurrugs-kj8bpr4k4-qlink149s-projects.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+]
+
+
+def get_cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS", "")
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+    for default_origin in DEFAULT_CORS_ORIGINS:
+        if default_origin not in origins:
+            origins.append(default_origin)
+
+    return origins or ["*"]
+
 app = FastAPI(
     title="Jaipur Rugs chatbot backend API",
     version="0.1.0",
@@ -25,7 +45,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
