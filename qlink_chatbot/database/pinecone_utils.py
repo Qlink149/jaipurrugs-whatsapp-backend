@@ -13,6 +13,7 @@ from qlink_chatbot.utils.logger_config import logger
 load_dotenv()
 
 def _clean_env(name: str) -> str | None:
+    # Vercel env values can accidentally include whitespace/newlines when pasted.
     value = os.getenv(name)
     if value is None:
         return None
@@ -37,6 +38,7 @@ def get_index():
         return None
 
     try:
+        # Delay network-dependent client setup until runtime so imports stay safe.
         index = pine_client.Index("demo")
     except Exception as exc:
         logger.error(f"[Pinecone] Failed to initialize index: {exc}")

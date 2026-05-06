@@ -28,6 +28,7 @@ class SingletonLogger:
         self.logger.setLevel(logging.DEBUG)
         self.logger.propagate = False
 
+        # Reuse the existing logger instance during hot reloads/import retries.
         if self.logger.handlers:
             return
 
