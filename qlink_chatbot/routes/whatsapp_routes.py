@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+import asyncio
+
+from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi.responses import JSONResponse, Response
 
 from qlink_chatbot.agent.chat_agent import chat_agent
 from qlink_chatbot.database.mongo_utils import (
@@ -78,31 +80,24 @@ def _extract_user_message_text(message_payload: dict) -> str:
     return ""
 
 
-@whatsapp_router.post("/gupshup/message/hc")
-async def gupshup_messages(data: Request):
-    """Gupshup webhook endpoint to receive and reply to WhatsApp messages."""
-    request_data = await data.json()
-    logger.info("Gupshup request received", extra={"data": request_data})
-
+async def _process_message(request_data: dict) -> None:
+    """Process the inbound message in the background after returning 200 to Gupshup."""
     phone_number = ""
-
     try:
         gupshup_message = _extract_gupshup_message(request_data)
+
         if request_data.get("type") and request_data.get("type") != "message":
-            logger.info(
-                "Ignoring non-message Gupshup callback",
-                extra={"type": request_data.get("type")},
-            )
-            return {"status": "success", "ignored_type": request_data.get("type")}
+            logger.info("Ignoring non-message Gupshup callback",
+                        extra={"type": request_data.get("type")})
+            return
 
         whatsapp_event = _extract_event(request_data)
 
         statuses = whatsapp_event.get("statuses", [])
         if statuses:
-            status_payload = statuses[0]
-            status = status_payload.get("type") or status_payload.get("status")
+            status = statuses[0].get("type") or statuses[0].get("status")
             logger.info("Ignoring status callback", extra={"status": status})
-            return {"status": "success", "ignored_status": status}
+            return
 
         incoming_messages = whatsapp_event.get("messages", [])
         if gupshup_message:
@@ -116,49 +111,28 @@ async def gupshup_messages(data: Request):
             user_text = _extract_user_message_text(incoming_message)
         else:
             logger.info("No incoming messages in webhook payload")
-            return {"status": "ignored", "reason": "no_messages"}
+            return
 
-        if not phone_number:
-            return JSONResponse(
-                content={"status": "error", "message": "Missing sender number"},
-                status_code=400,
-            )
-
-        if not user_text:
-            logger.info(
-                "Ignoring unsupported inbound message type",
-                extra={"phone_number": phone_number, "message": request_data},
-            )
-            return {"status": "ignored", "reason": "unsupported_message_type"}
+        if not phone_number or not user_text:
+            logger.info("Skipping — missing phone or text",
+                        extra={"phone_number": phone_number})
+            return
 
         session_id = phone_number.lower()
-        session = get_session_by_id(
-            session_id=session_id,
-            collection_name=WHATSAPP_COLLECTION_NAME,
-        )
+        session = get_session_by_id(session_id=session_id,
+                                    collection_name=WHATSAPP_COLLECTION_NAME)
 
         if not session:
-            create_session(
-                session_id=session_id,
-                country_code="",
-                name=whatsapp_username,
-                is_ai=True,
-                collection_name=WHATSAPP_COLLECTION_NAME,
-            )
+            create_session(session_id=session_id, country_code="",
+                           name=whatsapp_username, is_ai=True,
+                           collection_name=WHATSAPP_COLLECTION_NAME)
             session = {"chat_history": [], "country_code": ""}
         elif whatsapp_username and whatsapp_username != session.get("user_name", ""):
-            save_user_name(
-                session_id=session_id,
-                name=whatsapp_username,
-                collection_name=WHATSAPP_COLLECTION_NAME,
-            )
+            save_user_name(session_id=session_id, name=whatsapp_username,
+                           collection_name=WHATSAPP_COLLECTION_NAME)
 
-        save_message(
-            session_id=session_id,
-            role="user",
-            content=user_text,
-            collection_name=WHATSAPP_COLLECTION_NAME,
-        )
+        save_message(session_id=session_id, role="user", content=user_text,
+                     collection_name=WHATSAPP_COLLECTION_NAME)
 
         bot_text = await chat_agent(
             chat_history=session.get("chat_history", []),
@@ -170,42 +144,30 @@ async def gupshup_messages(data: Request):
         )
 
         bot_text = bot_text or "Sorry, I could not generate a response right now."
-        save_message(
-            session_id=session_id,
-            role="assistant",
-            content=bot_text,
-            collection_name=WHATSAPP_COLLECTION_NAME,
-        )
+        save_message(session_id=session_id, role="assistant", content=bot_text,
+                     collection_name=WHATSAPP_COLLECTION_NAME)
 
-        bot_responses = [{"type": "text", "text": bot_text}]
-        dispatch_whatsapp_responses(
-            phone_number=phone_number,
-            bot_responses=bot_responses,
-        )
-
-        return {"status": "success"}
+        dispatch_whatsapp_responses(phone_number=phone_number,
+                                    bot_responses=[{"type": "text", "text": bot_text}])
 
     except Exception as e:
-        logger.exception(
-            "Exception occurred while handling WhatsApp webhook",
-            extra={"exception": str(e), "phone_number": phone_number},
-        )
-
+        logger.exception("Exception in background message processing",
+                         extra={"exception": str(e), "phone_number": phone_number})
         if phone_number:
             try:
                 dispatch_whatsapp_responses(
                     phone_number=phone_number,
-                    bot_responses=[
-                        {
-                            "type": "text",
-                            "text": "Unexpected error occurred.",
-                        }
-                    ],
+                    bot_responses=[{"type": "text", "text": "Unexpected error occurred."}],
                 )
             except Exception as send_error:
-                logger.error(
-                    "Failed to send fallback WhatsApp message",
-                    extra={"error": str(send_error), "phone_number": phone_number},
-                )
+                logger.error("Failed to send fallback message",
+                             extra={"error": str(send_error), "phone_number": phone_number})
 
-        return JSONResponse(content={"status": "error"}, status_code=500)
+
+@whatsapp_router.post("/gupshup/message/hc")
+async def gupshup_messages(data: Request, background_tasks: BackgroundTasks):
+    """Gupshup webhook — returns empty 200 immediately, processes in background."""
+    request_data = await data.json()
+    logger.info("Gupshup request received", extra={"data": request_data})
+    background_tasks.add_task(_process_message, request_data)
+    return Response(status_code=200)
