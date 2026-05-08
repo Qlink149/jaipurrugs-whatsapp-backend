@@ -20,13 +20,34 @@ WHATSAPP_COLLECTION_NAME = "users_whatsapp"
 _IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
 
 
-def _split_text_and_images(text: str) -> tuple[str, list[str]]:
-    """Extract image URLs from markdown ![...](url) and return cleaned text + url list."""
-    image_urls = _IMAGE_MD_RE.findall(text)
-    cleaned = _IMAGE_MD_RE.sub("", text).strip()
-    # collapse runs of blank lines left behind
-    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
-    return cleaned, image_urls
+def _build_whatsapp_responses(text: str) -> list[dict]:
+    """Split bot text into WhatsApp messages.
+
+    Blocks that contain an image URL become image+caption messages.
+    Blocks without an image are batched into text messages.
+    """
+    blocks = [b.strip() for b in re.split(r'\n\n+', text.strip()) if b.strip()]
+    responses: list[dict] = []
+    pending_text: list[str] = []
+
+    for block in blocks:
+        match = _IMAGE_MD_RE.search(block)
+        if match:
+            if pending_text:
+                responses.append({"type": "text", "text": "\n\n".join(pending_text)})
+                pending_text = []
+            image_url = match.group(1)
+            caption = _IMAGE_MD_RE.sub("", block)
+            caption = re.sub(r'\n\s*[-·•]\s*$', '', caption).strip()
+            caption = re.sub(r'\n{3,}', '\n\n', caption).strip()
+            responses.append({"type": "image", "image_url": image_url, "caption": caption})
+        else:
+            pending_text.append(block)
+
+    if pending_text:
+        responses.append({"type": "text", "text": "\n\n".join(pending_text)})
+
+    return responses or [{"type": "text", "text": text}]
 
 
 def _extract_event(request_data: dict) -> dict:
@@ -162,10 +183,7 @@ async def _process_message(request_data: dict) -> None:
         save_message(session_id=session_id, role="assistant", content=bot_text,
                      collection_name=WHATSAPP_COLLECTION_NAME)
 
-        cleaned_text, image_urls = _split_text_and_images(bot_text)
-        responses = [{"type": "text", "text": cleaned_text}]
-        for url in image_urls:
-            responses.append({"type": "image", "image_url": url, "caption": ""})
+        responses = _build_whatsapp_responses(bot_text)
         dispatch_whatsapp_responses(phone_number=phone_number, bot_responses=responses)
 
     except Exception as e:
