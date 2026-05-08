@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, Response
@@ -15,6 +16,17 @@ from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_response
 
 whatsapp_router = APIRouter()
 WHATSAPP_COLLECTION_NAME = "users_whatsapp"
+
+_IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
+
+
+def _split_text_and_images(text: str) -> tuple[str, list[str]]:
+    """Extract image URLs from markdown ![...](url) and return cleaned text + url list."""
+    image_urls = _IMAGE_MD_RE.findall(text)
+    cleaned = _IMAGE_MD_RE.sub("", text).strip()
+    # collapse runs of blank lines left behind
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+    return cleaned, image_urls
 
 
 def _extract_event(request_data: dict) -> dict:
@@ -150,8 +162,11 @@ async def _process_message(request_data: dict) -> None:
         save_message(session_id=session_id, role="assistant", content=bot_text,
                      collection_name=WHATSAPP_COLLECTION_NAME)
 
-        dispatch_whatsapp_responses(phone_number=phone_number,
-                                    bot_responses=[{"type": "text", "text": bot_text}])
+        cleaned_text, image_urls = _split_text_and_images(bot_text)
+        responses = [{"type": "text", "text": cleaned_text}]
+        for url in image_urls:
+            responses.append({"type": "image", "image_url": url, "caption": ""})
+        dispatch_whatsapp_responses(phone_number=phone_number, bot_responses=responses)
 
     except Exception as e:
         logger.exception("Exception in background message processing",
