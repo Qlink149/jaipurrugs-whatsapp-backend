@@ -2,12 +2,11 @@ import json
 
 import httpx
 
-from qlink_chatbot.constants import GUPSHUP_SOURCE
 from qlink_chatbot.utils.env_load import (
     default_country_code,
-    gupshup_api_key,
-    gupshup_app_name,
-    gupshup_source,
+    qlink_gupshup_api_key,
+    qlink_gupshup_app_name,
+    qlink_gupshup_source,
 )
 from qlink_chatbot.utils.logger_config import logger
 
@@ -25,16 +24,16 @@ def send_text_message(phone_number: str, bot_response: str):
         "Sending text message to phone number with message",
         extra={"phone_number": phone_number, "bot_response": bot_response},
     )
-    
-    source = gupshup_source or GUPSHUP_SOURCE
-    app_name = gupshup_app_name
+
+    source = qlink_gupshup_source
+    app_name = qlink_gupshup_app_name
 
     destination = _normalize_destination(phone_number=phone_number)
     url = "https://api.gupshup.io/wa/api/v1/msg"
 
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
-        "apikey": gupshup_api_key,
+        "apikey": qlink_gupshup_api_key,
     }
 
     # Modify the data to match the cURL request format
