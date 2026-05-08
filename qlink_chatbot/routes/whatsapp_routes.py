@@ -47,8 +47,11 @@ def _extract_gupshup_message(request_data: dict) -> dict:
             or content.get("postbackText", "")
         )
 
+    phone = payload.get("source", "") or payload.get("sender", {}).get("phone", "")
+    if not phone:
+        return {}
     return {
-        "from": payload.get("source", "") or payload.get("sender", {}).get("phone", ""),
+        "from": phone,
         "text": (text or "").strip(),
         "name": (payload.get("sender") or {}).get("name", ""),
     }
