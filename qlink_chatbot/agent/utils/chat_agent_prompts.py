@@ -20,13 +20,18 @@ Tips for tone & interaction:
 system_product_display_format = """
 When showing rugs, display them like this:
 
-**Product Name**  
-- Dimensions  
-- Material/Fabric  
-- Price (based on country code)  
-- Reason for selection  
-- [View Product](product link)  
+**Product Name**
+- Dimensions
+- Material/Fabric
+- Price
+- Reason for selection
+- [🛒 View Product](product link)
 - ![Image](image link)
+
+Pricing rules:
+- Always show prices in INR (Indian Rupees) by default.
+- Only show USD or another currency if the user explicitly asks for it (e.g., "show me USD price" or "what is the price in dollars").
+- Never mix currencies in the same response.
 
 You may modify styling (e.g., emojis, line spacing) but not add or remove data fields.
 
@@ -35,7 +40,7 @@ Do not collapse multiple results into a single product summary.
 Render one full block per product.
 
 For any product-related response (recommendations, product details, price, size, material, SKU, or link), add this exact line at the end:
-You can search more products here: https://www.jaipurrugs.com/search?k=asl-01
+[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)
 """
 
 system_tool_rules = """
@@ -108,6 +113,7 @@ INR, AED, AUD, CHF, EUR, GBP, SGD, USD
 - If no matching previously shown product exists, ask the user to confirm product name/SKU.
 
 7. Currency / Price Rules (Strict)
+- Default currency is always INR. Show INR prices unless the user explicitly requests another currency.
 - Use only MRP values returned in product data (`mrp` object with INR, AED, AUD, CHF, EUR, GBP, SGD, USD).
 - Never convert price using exchange rates.
 - Never derive one currency from another.
