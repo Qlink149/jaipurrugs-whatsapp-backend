@@ -18,6 +18,7 @@ from qlink_chatbot.utils.logger_config import logger
 DEFAULT_CORS_ORIGINS = [
     "https://jaipurrugs-bot.vercel.app",
     "https://jaipurrugs-kj8bpr4k4-qlink149s-projects.vercel.app",
+    "https://qlink-jr.vercel.app",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://localhost:3001",
