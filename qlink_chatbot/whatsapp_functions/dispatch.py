@@ -1,5 +1,8 @@
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.whatsapp_functions.media.send_image import send_image_message
+from qlink_chatbot.whatsapp_functions.media.send_interactive_message import (
+    send_interactive_cta_message,
+)
 from qlink_chatbot.whatsapp_functions.send_text_message import send_text_message
 
 
@@ -34,6 +37,12 @@ def dispatch_whatsapp_responses(phone_number: str, bot_responses):
 
         if response_type == "image":
             send_image_message(phone_number=phone_number, bot_response=response)
+            continue
+
+        if response_type == "product_cta":
+            send_interactive_cta_message(
+                phone_number=phone_number, bot_response=response
+            )
             continue
 
         if response_type in {"text", "text_with_image"}:
