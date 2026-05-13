@@ -1,8 +1,7 @@
-import asyncio
 import re
 
 from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 from qlink_chatbot.agent.chat_agent import chat_agent
 from qlink_chatbot.database.mongo_utils import (
@@ -12,7 +11,9 @@ from qlink_chatbot.database.mongo_utils import (
     save_user_name,
 )
 from qlink_chatbot.utils.logger_config import logger
-from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_responses
+from qlink_chatbot.whatsapp_functions.dispatch import (
+    dispatch_whatsapp_responses,
+)
 
 whatsapp_router = APIRouter()
 WHATSAPP_COLLECTION_NAME = "users_whatsapp"
@@ -77,7 +78,9 @@ def _extract_gupshup_message(request_data: dict) -> dict:
     payload = request_data.get("payload") or {}
     if not payload and request_data.get("source") and request_data.get("type"):
         payload = request_data
-    message_type = (payload.get("type") or request_data.get("payload", {}).get("type") or "").strip()
+    message_type = (
+        payload.get("type") or request_data.get("payload", {}).get("type") or ""
+    ).strip()
     content = payload.get("payload")
     if not isinstance(content, dict):
         content = payload
