@@ -10,7 +10,9 @@ from qlink_chatbot.utils.env_load import (
 )
 from qlink_chatbot.utils.logger_config import logger
 
-PRODUCT_TEMPLATE_NAME = "jaipur_rugs_product"
+# Template must be APPROVED in Gupshup before messages can be sent.
+# jaipur_view_product: static body + dynamic URL suffix via buttons[0].parameter
+PRODUCT_TEMPLATE_NAME = "jaipur_view_product"
 JAIPURRUGS_BASE_URL = "https://www.jaipurrugs.com/"
 
 
@@ -45,16 +47,12 @@ def send_product_template_message(phone_number: str, bot_response: dict):
 
     url_suffix = _extract_url_suffix(bot_response.get("button_url", ""))
 
+    # Template body is static — no params needed.
+    # URL suffix is passed dynamically via buttons[0].parameter at send time.
     template_payload = {
         "id": PRODUCT_TEMPLATE_NAME,
-        "params": [bot_response.get("caption", "")],
+        "params": [],
         "buttons": [{"type": "url", "parameter": url_suffix}],
-    }
-
-    message_payload = {
-        "type": "image",
-        "originalUrl": bot_response.get("image_url", ""),
-        "previewUrl": bot_response.get("image_url", ""),
     }
 
     data = {
@@ -62,7 +60,6 @@ def send_product_template_message(phone_number: str, bot_response: dict):
         "source": qlink_gupshup_source,
         "destination": destination,
         "template": json.dumps(template_payload),
-        "message": json.dumps(message_payload),
         "src.name": qlink_gupshup_app_name,
     }
 

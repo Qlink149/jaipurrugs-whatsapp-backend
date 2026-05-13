@@ -40,6 +40,10 @@ def dispatch_whatsapp_responses(phone_number: str, bot_responses):
             continue
 
         if response_type == "product_template":
+            # Send the product image + caption first, then the template button.
+            # Gupshup doesn't support {{1}} body + URL buttons in the same template,
+            # so product details go in the image caption and the template provides the CTA.
+            send_image_message(phone_number=phone_number, bot_response=response)
             send_product_template_message(
                 phone_number=phone_number, bot_response=response
             )
