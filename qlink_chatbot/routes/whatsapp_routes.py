@@ -18,6 +18,17 @@ whatsapp_router = APIRouter()
 WHATSAPP_COLLECTION_NAME = "users_whatsapp"
 
 _IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
+_LINK_MD_RE = re.compile(r'\[([^\]]+)\]\((https?://[^\)]+)\)')
+_BOLD_MD_RE = re.compile(r'\*\*(.+?)\*\*')
+
+
+def _convert_markdown_for_whatsapp(text: str) -> str:
+    """Convert markdown to WhatsApp-compatible formatting."""
+    # Convert **bold** → *bold* (WhatsApp bold syntax)
+    text = _BOLD_MD_RE.sub(r'*\1*', text)
+    # Convert [label](url) → label: url  (WhatsApp doesn't support hyperlinks)
+    text = _LINK_MD_RE.sub(r'\1: \2', text)
+    return text
 
 
 def _build_whatsapp_responses(text: str) -> list[dict]:
@@ -26,6 +37,7 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
     Blocks that contain an image URL become image+caption messages.
     Blocks without an image are batched into text messages.
     """
+    text = _convert_markdown_for_whatsapp(text)
     blocks = [b.strip() for b in re.split(r'\n\n+', text.strip()) if b.strip()]
     responses: list[dict] = []
     pending_text: list[str] = []
