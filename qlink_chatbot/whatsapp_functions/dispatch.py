@@ -1,5 +1,8 @@
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.whatsapp_functions.media.send_image import send_image_message
+from qlink_chatbot.whatsapp_functions.media.send_template_message import (
+    send_product_template_message,
+)
 from qlink_chatbot.whatsapp_functions.send_text_message import send_text_message
 
 
@@ -34,6 +37,16 @@ def dispatch_whatsapp_responses(phone_number: str, bot_responses):
 
         if response_type == "image":
             send_image_message(phone_number=phone_number, bot_response=response)
+            continue
+
+        if response_type == "product_template":
+            # Send the product image + caption first, then the template button.
+            # Gupshup doesn't support {{1}} body + URL buttons in the same template,
+            # so product details go in the image caption and the template provides the CTA.
+            send_image_message(phone_number=phone_number, bot_response=response)
+            send_product_template_message(
+                phone_number=phone_number, bot_response=response
+            )
             continue
 
         if response_type in {"text", "text_with_image"}:
