@@ -19,7 +19,7 @@ whatsapp_router = APIRouter()
 WHATSAPP_COLLECTION_NAME = "users_whatsapp"
 
 _IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
-_LINK_MD_RE = re.compile(r'\[([^\]]+)\]\((https?://[^\)]+)\)')
+_LINK_MD_RE = re.compile(r'(?<!!)\[([^\]]+)\]\((https?://[^\)]+)\)')
 _BOLD_MD_RE = re.compile(r'\*\*(.+?)\*\*')
 
 
