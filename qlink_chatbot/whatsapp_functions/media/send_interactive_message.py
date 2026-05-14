@@ -21,7 +21,7 @@ def _normalize_destination(phone_number: str) -> str:
 
 
 def send_interactive_cta_message(phone_number: str, bot_response: dict):
-    """Send an interactive CTA URL button message, optionally with an image header."""
+    """Send an interactive CTA URL button message with an image header."""
     logger.info(
         "Sending interactive CTA message",
         extra={"phone_number": phone_number, "bot_response": bot_response},
@@ -35,14 +35,16 @@ def send_interactive_cta_message(phone_number: str, bot_response: dict):
         "apikey": qlink_gupshup_api_key,
     }
 
-    body_text = (
-        bot_response.get("text") or bot_response.get("caption") or ""
-    )[:_MAX_BODY_LENGTH]
+    body_text = (bot_response.get("caption") or "")[:_MAX_BODY_LENGTH]
 
     message_payload = {
         "type": "interactive",
         "interactive": {
             "type": "cta_url",
+            "header": {
+                "type": "image",
+                "image": {"link": bot_response.get("image_url", "")},
+            },
             "body": {"text": body_text},
             "action": {
                 "name": "cta_url",
@@ -53,11 +55,6 @@ def send_interactive_cta_message(phone_number: str, bot_response: dict):
             },
         },
     }
-    if bot_response.get("image_url"):
-        message_payload["interactive"]["header"] = {
-            "type": "image",
-            "image": {"link": bot_response.get("image_url", "")},
-        }
 
     data = {
         "channel": "whatsapp",
