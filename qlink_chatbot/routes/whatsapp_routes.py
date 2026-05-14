@@ -55,22 +55,18 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             caption = _IMAGE_MD_RE.sub("", block)
             caption = re.sub(r'\n\s*[-·•]\s*$', '', caption).strip()
             caption = re.sub(r'\n{3,}', '\n\n', caption).strip()
+            # Keep View Product URL in caption — WhatsApp auto-hyperlinks it.
+            # Template button approach requires Meta approval (too slow).
             product_url_match = _VIEW_PRODUCT_RE.search(caption)
             if product_url_match:
                 product_url = product_url_match.group(1)
                 caption = _VIEW_PRODUCT_RE.sub("", caption).strip()
-                responses.append({
-                    "type": "product_template",
-                    "image_url": image_url,
-                    "caption": caption,
-                    "button_url": product_url,
-                })
-            else:
-                responses.append({
-                    "type": "image",
-                    "image_url": image_url,
-                    "caption": caption,
-                })
+                caption = f"{caption}\n\nView Product: {product_url}"
+            responses.append({
+                "type": "image",
+                "image_url": image_url,
+                "caption": caption,
+            })
         else:
             pending_text.append(block)
 
