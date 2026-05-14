@@ -22,7 +22,7 @@ _IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
 _LINK_MD_RE = re.compile(r'(?<!!)\[([^\]]+)\]\((https?://[^\)]+)\)')
 _BOLD_MD_RE = re.compile(r'\*\*(.+?)\*\*')
 _VIEW_PRODUCT_RE = re.compile(
-    r'[-·•]\s*(?:🛒\s*)?View Product:\s*(https?://\S+)',
+    r'[-·•]?\s*(?:[^\w\s]+\s*)*View Product:\s*(https?://\S+)',
     re.IGNORECASE,
 )
 def _convert_markdown_for_whatsapp(text: str) -> str:
