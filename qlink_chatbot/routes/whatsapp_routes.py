@@ -22,9 +22,25 @@ _IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
 _LINK_MD_RE = re.compile(r'(?<!!)\[([^\]]+)\]\((https?://[^\)]+)\)')
 _BOLD_MD_RE = re.compile(r'\*\*(.+?)\*\*')
 _VIEW_PRODUCT_RE = re.compile(
-    r'[-·•]\s*(?:🛒\s*)?View Product:\s*(https?://\S+)',
+    r'[-·•]?\s*(?:[^\w\s]+\s*)*View Product:\s*(https?://\S+)',
     re.IGNORECASE,
 )
+_SEARCH_MORE_RE = re.compile(
+    r'^\s*(?:[-·•]\s*)?(?:[^\w\s]+\s*)*Search More Rugs:\s*(https?://\S+)\s*$',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _remove_search_more_link(text: str) -> tuple[str, str | None]:
+    """Remove the Search More Rugs link and return it as a CTA URL."""
+    match = _SEARCH_MORE_RE.search(text)
+    if not match:
+        return text, None
+    cleaned_text = _SEARCH_MORE_RE.sub("", text).strip()
+    cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text).strip()
+    return cleaned_text, match.group(1)
+
+
 def _convert_markdown_for_whatsapp(text: str) -> str:
     """Convert markdown to WhatsApp-compatible formatting."""
     # Convert **bold** → *bold* (WhatsApp bold syntax)
@@ -44,8 +60,15 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
     blocks = [b.strip() for b in re.split(r'\n\n+', text.strip()) if b.strip()]
     responses: list[dict] = []
     pending_text: list[str] = []
+    search_more_url: str | None = None
 
     for block in blocks:
+        block, block_search_more_url = _remove_search_more_link(block)
+        if block_search_more_url:
+            search_more_url = block_search_more_url
+        if not block:
+            continue
+
         match = _IMAGE_MD_RE.search(block)
         if match:
             if pending_text:
@@ -55,23 +78,38 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             caption = _IMAGE_MD_RE.sub("", block)
             caption = re.sub(r'\n\s*[-·•]\s*$', '', caption).strip()
             caption = re.sub(r'\n{3,}', '\n\n', caption).strip()
-            # Keep View Product URL in caption — WhatsApp auto-hyperlinks it.
-            # Template button approach requires Meta approval (too slow).
+            caption, caption_search_more_url = _remove_search_more_link(caption)
+            if caption_search_more_url:
+                search_more_url = caption_search_more_url
             product_url_match = _VIEW_PRODUCT_RE.search(caption)
             if product_url_match:
                 product_url = product_url_match.group(1)
                 caption = _VIEW_PRODUCT_RE.sub("", caption).strip()
-                caption = f"{caption}\n\nView Product: {product_url}"
-            responses.append({
-                "type": "image",
-                "image_url": image_url,
-                "caption": caption,
-            })
+                responses.append({
+                    "type": "product_template",
+                    "image_url": image_url,
+                    "caption": caption,
+                    "button_url": product_url,
+                })
+            else:
+                responses.append({
+                    "type": "image",
+                    "image_url": image_url,
+                    "caption": caption,
+                })
         else:
             pending_text.append(block)
 
     if pending_text:
         responses.append({"type": "text", "text": "\n\n".join(pending_text)})
+
+    if search_more_url:
+        responses.append({
+            "type": "interactive_cta",
+            "text": "Want to keep browsing?",
+            "button_text": "Search More Rugs",
+            "button_url": search_more_url,
+        })
 
     return responses or [{"type": "text", "text": text}]
 
