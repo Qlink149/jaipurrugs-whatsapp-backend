@@ -4,13 +4,15 @@ import httpx
 
 from qlink_chatbot.utils.env_load import (
     default_country_code,
+    gupshup_product_template_name,
+    gupshup_product_template_type,
     qlink_gupshup_api_key,
     qlink_gupshup_app_name,
     qlink_gupshup_source,
 )
 from qlink_chatbot.utils.logger_config import logger
 
-PRODUCT_TEMPLATE_NAME = "jaipur_rugs_product"
+PRODUCT_TEMPLATE_NAME = gupshup_product_template_name
 JAIPURRUGS_BASE_URL = "https://www.jaipurrugs.com/"
 
 
@@ -29,7 +31,7 @@ def _extract_url_suffix(full_url: str) -> str:
 
 
 def send_product_template_message(phone_number: str, bot_response: dict):
-    """Send a Gupshup template message with image header, body text, and View Product URL button."""
+    """Send a Gupshup template message with View Product and Search More Rugs buttons."""
     logger.info(
         "Sending product template message",
         extra={"phone_number": phone_number, "bot_response": bot_response},
@@ -51,20 +53,20 @@ def send_product_template_message(phone_number: str, bot_response: dict):
         "buttons": [{"type": "url", "parameter": url_suffix}],
     }
 
-    message_payload = {
-        "type": "image",
-        "originalUrl": bot_response.get("image_url", ""),
-        "previewUrl": bot_response.get("image_url", ""),
-    }
-
     data = {
         "channel": "whatsapp",
         "source": qlink_gupshup_source,
         "destination": destination,
         "template": json.dumps(template_payload),
-        "message": json.dumps(message_payload),
         "src.name": qlink_gupshup_app_name,
     }
+    if gupshup_product_template_type == "IMAGE" and bot_response.get("image_url"):
+        message_payload = {
+            "type": "image",
+            "originalUrl": bot_response.get("image_url", ""),
+            "previewUrl": bot_response.get("image_url", ""),
+        }
+        data["message"] = json.dumps(message_payload)
 
     try:
         response = httpx.post(url, headers=headers, data=data)

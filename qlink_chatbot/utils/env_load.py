@@ -16,3 +16,13 @@ qlink_gupshup_api_key = os.getenv("QLINK_GUPSHUP_API_KEY", "")
 qlink_gupshup_partner_app_token = os.getenv("QLINK_GUPSHUP_PARTNER_APP_TOKEN", "")
 qlink_gupshup_app_name = os.getenv("QLINK_GUPSHUP_APP_NAME", "")
 qlink_gupshup_source = os.getenv("QLINK_GUPSHUP_SOURCE", "")
+gupshup_product_template_name = os.getenv(
+    "GUPSHUP_PRODUCT_TEMPLATE_NAME", "jaipur_rugs_product_cta"
+)
+gupshup_product_template_type = os.getenv(
+    "GUPSHUP_PRODUCT_TEMPLATE_TYPE", "TEXT"
+).strip().upper()
+gupshup_use_product_template = (
+    os.getenv("GUPSHUP_USE_PRODUCT_TEMPLATE", "false").strip().lower()
+    in {"1", "true", "yes"}
+)

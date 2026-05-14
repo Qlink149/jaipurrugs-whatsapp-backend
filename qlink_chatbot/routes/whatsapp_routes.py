@@ -1,7 +1,8 @@
+import asyncio
 import re
 
 from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from qlink_chatbot.agent.chat_agent import chat_agent
 from qlink_chatbot.database.mongo_utils import (
@@ -11,27 +12,12 @@ from qlink_chatbot.database.mongo_utils import (
     save_user_name,
 )
 from qlink_chatbot.utils.logger_config import logger
-from qlink_chatbot.whatsapp_functions.dispatch import (
-    dispatch_whatsapp_responses,
-)
+from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_responses
 
 whatsapp_router = APIRouter()
 WHATSAPP_COLLECTION_NAME = "users_whatsapp"
 
 _IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
-_LINK_MD_RE = re.compile(r'(?<!!)\[([^\]]+)\]\((https?://[^\)]+)\)')
-_BOLD_MD_RE = re.compile(r'\*\*(.+?)\*\*')
-_VIEW_PRODUCT_RE = re.compile(
-    r'[-·•]?\s*(?:[^\w\s]+\s*)*View Product:\s*(https?://\S+)',
-    re.IGNORECASE,
-)
-def _convert_markdown_for_whatsapp(text: str) -> str:
-    """Convert markdown to WhatsApp-compatible formatting."""
-    # Convert **bold** → *bold* (WhatsApp bold syntax)
-    text = _BOLD_MD_RE.sub(r'*\1*', text)
-    # Convert [label](url) → label: url  (WhatsApp doesn't support hyperlinks)
-    text = _LINK_MD_RE.sub(r'\1: \2', text)
-    return text
 
 
 def _build_whatsapp_responses(text: str) -> list[dict]:
@@ -40,7 +26,6 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
     Blocks that contain an image URL become image+caption messages.
     Blocks without an image are batched into text messages.
     """
-    text = _convert_markdown_for_whatsapp(text)
     blocks = [b.strip() for b in re.split(r'\n\n+', text.strip()) if b.strip()]
     responses: list[dict] = []
     pending_text: list[str] = []
@@ -55,18 +40,7 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             caption = _IMAGE_MD_RE.sub("", block)
             caption = re.sub(r'\n\s*[-·•]\s*$', '', caption).strip()
             caption = re.sub(r'\n{3,}', '\n\n', caption).strip()
-            # Keep View Product URL in caption — WhatsApp auto-hyperlinks it.
-            # Template button approach requires Meta approval (too slow).
-            product_url_match = _VIEW_PRODUCT_RE.search(caption)
-            if product_url_match:
-                product_url = product_url_match.group(1)
-                caption = _VIEW_PRODUCT_RE.sub("", caption).strip()
-                caption = f"{caption}\n\nView Product: {product_url}"
-            responses.append({
-                "type": "image",
-                "image_url": image_url,
-                "caption": caption,
-            })
+            responses.append({"type": "image", "image_url": image_url, "caption": caption})
         else:
             pending_text.append(block)
 
@@ -91,9 +65,7 @@ def _extract_gupshup_message(request_data: dict) -> dict:
     payload = request_data.get("payload") or {}
     if not payload and request_data.get("source") and request_data.get("type"):
         payload = request_data
-    message_type = (
-        payload.get("type") or request_data.get("payload", {}).get("type") or ""
-    ).strip()
+    message_type = (payload.get("type") or request_data.get("payload", {}).get("type") or "").strip()
     content = payload.get("payload")
     if not isinstance(content, dict):
         content = payload
