@@ -62,6 +62,7 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
     blocks = [b.strip() for b in re.split(r'\n\n+', text.strip()) if b.strip()]
     responses: list[dict] = []
     pending_text: list[str] = []
+    deferred_search_cta: dict | None = None
 
     for block in blocks:
         match = _IMAGE_MD_RE.search(block)
@@ -86,22 +87,22 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
         else:
             cleaned, search_url, btn_label = _extract_search_cta(block)
             if search_url:
-                if pending_text:
-                    responses.append({"type": "text", "text": "\n\n".join(pending_text)})
-                    pending_text = []
                 if cleaned:
                     pending_text.append(cleaned)
-                responses.append({
+                deferred_search_cta = {
                     "type": "interactive_cta",
                     "button_url": search_url,
                     "caption": "Tap below to browse more rugs.",
                     "button_text": btn_label,
-                })
+                }
             else:
                 pending_text.append(block)
 
     if pending_text:
         responses.append({"type": "text", "text": "\n\n".join(pending_text)})
+
+    if deferred_search_cta:
+        responses.append(deferred_search_cta)
 
     return responses or [{"type": "text", "text": text}]
 
