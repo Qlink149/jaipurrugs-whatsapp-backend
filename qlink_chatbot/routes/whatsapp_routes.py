@@ -30,6 +30,7 @@ def _extract_cta(caption: str) -> tuple[str, str | None]:
         label, url = match.group(1), match.group(2)
         if "view product" in label.lower() or "jaipurrugs.com/in/rugs" in url:
             cleaned = _MD_LINK_RE.sub("", caption, count=1).strip()
+            cleaned = re.sub(r'(?m)^\s*[-·•]\s*$', '', cleaned)
             cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
             return cleaned, url
     return caption, None
@@ -44,6 +45,7 @@ def _extract_search_cta(text: str) -> tuple[str, str | None, str | None]:
         label, url = match.group(1), match.group(2)
         if "search" in label.lower() or "browse" in label.lower() or "/search" in url:
             cleaned = _MD_LINK_RE.sub("", text, count=1).strip()
+            cleaned = re.sub(r'(?m)^\s*[-·•]\s*$', '', cleaned)
             cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
             # strip emoji from label for button_text
             btn_label = re.sub(r'[^\w\s]', '', label).strip() or "Search More Rugs"
@@ -69,6 +71,7 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
                 pending_text = []
             image_url = match.group(1)
             caption = _IMAGE_MD_RE.sub("", block)
+            caption = re.sub(r'(?m)^\s*[-·•]\s*$', '', caption)
             caption = re.sub(r'\n\s*[-·•]\s*$', '', caption).strip()
             caption = re.sub(r'\n{3,}', '\n\n', caption).strip()
             caption, product_url = _extract_cta(caption)
