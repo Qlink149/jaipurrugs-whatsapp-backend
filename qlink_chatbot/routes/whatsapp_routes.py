@@ -18,13 +18,44 @@ whatsapp_router = APIRouter()
 WHATSAPP_COLLECTION_NAME = "users_whatsapp"
 
 _IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
+_MD_LINK_RE = re.compile(r'\[([^\]]+)\]\((https?://[^\)]+)\)')
+
+
+def _extract_cta(caption: str) -> tuple[str, str | None]:
+    """Pull the first [View Product](...) markdown link out of caption.
+
+    Returns (cleaned_caption, product_url) or (caption, None).
+    """
+    for match in _MD_LINK_RE.finditer(caption):
+        label, url = match.group(1), match.group(2)
+        if "view product" in label.lower() or "jaipurrugs.com/in/rugs" in url:
+            cleaned = _MD_LINK_RE.sub("", caption, count=1).strip()
+            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+            return cleaned, url
+    return caption, None
+
+
+def _extract_search_cta(text: str) -> tuple[str, str | None, str | None]:
+    """Pull the first search/browse markdown link out of a text block.
+
+    Returns (cleaned_text, search_url, button_label) or (text, None, None).
+    """
+    for match in _MD_LINK_RE.finditer(text):
+        label, url = match.group(1), match.group(2)
+        if "search" in label.lower() or "browse" in label.lower() or "/search" in url:
+            cleaned = _MD_LINK_RE.sub("", text, count=1).strip()
+            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+            # strip emoji from label for button_text
+            btn_label = re.sub(r'[^\w\s]', '', label).strip() or "Search More Rugs"
+            return cleaned, url, btn_label
+    return text, None, None
 
 
 def _build_whatsapp_responses(text: str) -> list[dict]:
     """Split bot text into WhatsApp messages.
 
-    Blocks that contain an image URL become image+caption messages.
-    Blocks without an image are batched into text messages.
+    Blocks with an image + View Product URL become interactive_cta messages
+    (real CTA button). Blocks without an image are batched into text messages.
     """
     blocks = [b.strip() for b in re.split(r'\n\n+', text.strip()) if b.strip()]
     responses: list[dict] = []
@@ -40,9 +71,33 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             caption = _IMAGE_MD_RE.sub("", block)
             caption = re.sub(r'\n\s*[-·•]\s*$', '', caption).strip()
             caption = re.sub(r'\n{3,}', '\n\n', caption).strip()
-            responses.append({"type": "image", "image_url": image_url, "caption": caption})
+            caption, product_url = _extract_cta(caption)
+            if product_url:
+                responses.append({
+                    "type": "interactive_cta",
+                    "image_url": image_url,
+                    "caption": caption,
+                    "button_url": product_url,
+                    "button_text": "View Product",
+                })
+            else:
+                responses.append({"type": "image", "image_url": image_url, "caption": caption})
         else:
-            pending_text.append(block)
+            cleaned, search_url, btn_label = _extract_search_cta(block)
+            if search_url:
+                if pending_text:
+                    responses.append({"type": "text", "text": "\n\n".join(pending_text)})
+                    pending_text = []
+                if cleaned:
+                    pending_text.append(cleaned)
+                responses.append({
+                    "type": "interactive_cta",
+                    "caption": "Search the full Jaipur Rugs collection",
+                    "button_url": search_url,
+                    "button_text": btn_label,
+                })
+            else:
+                pending_text.append(block)
 
     if pending_text:
         responses.append({"type": "text", "text": "\n\n".join(pending_text)})
