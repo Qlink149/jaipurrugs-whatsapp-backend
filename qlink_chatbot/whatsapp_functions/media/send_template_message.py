@@ -52,8 +52,7 @@ def send_product_template_message(phone_number: str, bot_response: dict):
 
     template_payload = {
         "id": PRODUCT_TEMPLATE_NAME,
-        "params": [caption],
-        "buttons": [{"type": "url", "parameter": url_suffix}],
+        "params": [caption, url_suffix],
     }
 
     data = {
