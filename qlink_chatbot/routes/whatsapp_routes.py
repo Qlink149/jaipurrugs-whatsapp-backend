@@ -184,7 +184,10 @@ async def _process_message(request_data: dict) -> None:
         statuses = whatsapp_event.get("statuses", [])
         if statuses:
             status = statuses[0].get("type") or statuses[0].get("status")
-            logger.info("Ignoring status callback", extra={"status": status})
+            logger.info(
+                "Ignoring status callback",
+                extra={"status": status, "statuses": statuses},
+            )
             return
 
         incoming_messages = whatsapp_event.get("messages", [])
