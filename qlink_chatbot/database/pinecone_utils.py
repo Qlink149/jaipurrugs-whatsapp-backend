@@ -39,7 +39,8 @@ def get_index():
 
     try:
         # Delay network-dependent client setup until runtime so imports stay safe.
-        index = pine_client.Index("demo")
+        index_name = _clean_env("PINECONE_INDEX") or "demo"
+        index = pine_client.Index(index_name)
     except Exception as exc:
         logger.error(f"[Pinecone] Failed to initialize index: {exc}")
         return None
@@ -57,7 +58,7 @@ def get_embedding(text:str):
     return response.data[0].embedding
 
 
-pinecone_kb_namespace = "jaipurrugs_kb"
+pinecone_kb_namespace = _clean_env("PINECONE_NAMESPACE") or "jaipurrugs_kb"
 
 def _generate_id(length=7):
     chars = string.ascii_letters + string.digits
