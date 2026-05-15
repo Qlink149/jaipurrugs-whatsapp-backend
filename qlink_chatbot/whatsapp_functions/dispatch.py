@@ -40,9 +40,13 @@ def dispatch_whatsapp_responses(phone_number: str, bot_responses):
             continue
 
         if response_type == "product_template":
-            send_product_template_message(
-                phone_number=phone_number, bot_response=response
-            )
+            button_url = response.get("button_url", "")
+            button_text = response.get("button_text", "View Product")
+            if button_url:
+                send_text_message(
+                    phone_number=phone_number,
+                    bot_response={"type": "text", "text": f"🔗 {button_text}\n{button_url}"},
+                )
             continue
 
         if response_type in {"text", "text_with_image"}:
