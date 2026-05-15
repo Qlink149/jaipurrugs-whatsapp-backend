@@ -46,11 +46,13 @@ def send_product_template_message(phone_number: str, bot_response: dict):
     }
 
     url_suffix = _extract_url_suffix(bot_response.get("button_url", ""))
-    caption = bot_response.get("caption", "")
+    caption = (bot_response.get("caption") or bot_response.get("button_text") or "").strip()
+    if not caption:
+        caption = "View Product"
 
     template_payload = {
         "id": PRODUCT_TEMPLATE_NAME,
-        "params": [caption] if caption else [],
+        "params": [caption],
         "buttons": [{"type": "url", "parameter": url_suffix}],
     }
 
