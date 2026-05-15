@@ -78,9 +78,10 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             responses.append({"type": "image", "image_url": image_url, "caption": caption})
             if product_url:
                 responses.append({
-                    "type": "product_template",
+                    "type": "interactive_cta",
                     "button_url": product_url,
-                    "caption": "View Product",
+                    "caption": "Tap below to view this rug on Jaipur Rugs.",
+                    "button_text": "View Product",
                 })
         else:
             cleaned, search_url, btn_label = _extract_search_cta(block)
@@ -91,9 +92,9 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
                 if cleaned:
                     pending_text.append(cleaned)
                 responses.append({
-                    "type": "product_template",
+                    "type": "interactive_cta",
                     "button_url": search_url,
-                    "caption": btn_label or "Search More Rugs",
+                    "caption": "Tap below to browse more rugs.",
                     "button_text": btn_label,
                 })
             else:
