@@ -35,6 +35,22 @@ def _extract_cta(caption: str) -> tuple[str, str | None]:
     return caption, None
 
 
+def _extract_search_cta(text: str) -> tuple[str, str | None, str | None]:
+    """Pull the first search/browse markdown link out of a text block.
+
+    Returns (cleaned_text, search_url, button_label) or (text, None, None).
+    """
+    for match in _MD_LINK_RE.finditer(text):
+        label, url = match.group(1), match.group(2)
+        if "search" in label.lower() or "browse" in label.lower() or "/search" in url:
+            cleaned = _MD_LINK_RE.sub("", text, count=1).strip()
+            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+            # strip emoji from label for button_text
+            btn_label = re.sub(r'[^\w\s]', '', label).strip() or "Search More Rugs"
+            return cleaned, url, btn_label
+    return text, None, None
+
+
 def _build_whatsapp_responses(text: str) -> list[dict]:
     """Split bot text into WhatsApp messages.
 
@@ -67,7 +83,21 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             else:
                 responses.append({"type": "image", "image_url": image_url, "caption": caption})
         else:
-            pending_text.append(block)
+            cleaned, search_url, btn_label = _extract_search_cta(block)
+            if search_url:
+                if pending_text:
+                    responses.append({"type": "text", "text": "\n\n".join(pending_text)})
+                    pending_text = []
+                if cleaned:
+                    pending_text.append(cleaned)
+                responses.append({
+                    "type": "interactive_cta",
+                    "caption": "Search the full Jaipur Rugs collection",
+                    "button_url": search_url,
+                    "button_text": btn_label,
+                })
+            else:
+                pending_text.append(block)
 
     if pending_text:
         responses.append({"type": "text", "text": "\n\n".join(pending_text)})
