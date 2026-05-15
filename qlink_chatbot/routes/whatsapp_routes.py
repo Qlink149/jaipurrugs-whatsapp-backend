@@ -72,13 +72,16 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             caption = re.sub(r'\n\s*[-·•]\s*$', '', caption).strip()
             caption = re.sub(r'\n{3,}', '\n\n', caption).strip()
             caption, product_url = _extract_cta(caption)
-            responses.append({"type": "image", "image_url": image_url, "caption": caption})
             if product_url:
                 responses.append({
-                    "type": "product_template",
+                    "type": "interactive_cta",
+                    "image_url": image_url,
+                    "caption": caption,
                     "button_url": product_url,
-                    "caption": "",
+                    "button_text": "View Product",
                 })
+            else:
+                responses.append({"type": "image", "image_url": image_url, "caption": caption})
         else:
             cleaned, search_url, btn_label = _extract_search_cta(block)
             if search_url:
@@ -88,9 +91,9 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
                 if cleaned:
                     pending_text.append(cleaned)
                 responses.append({
-                    "type": "product_template",
+                    "type": "interactive_cta",
                     "button_url": search_url,
-                    "caption": "",
+                    "caption": btn_label or "Search More Rugs",
                     "button_text": btn_label,
                 })
             else:
