@@ -49,18 +49,8 @@ def build_template_payload() -> dict[str, Any]:
     template_name = _env("GUPSHUP_PRODUCT_TEMPLATE_NAME", DEFAULT_TEMPLATE_NAME)
     product_url = _env("GUPSHUP_TEMPLATE_EXAMPLE_PRODUCT_URL", DEFAULT_PRODUCT_URL)
     search_url = _env("GUPSHUP_TEMPLATE_SEARCH_URL", DEFAULT_SEARCH_URL)
-    content = (
-        "{{1}}\n\n"
-        "Tap a button below to view this rug or continue exploring Jaipur Rugs."
-    )
-    example = (
-        "Moroccan (C.1980)\n"
-        "- Dimensions: 7x10'6 ft\n"
-        "- Material: Wool (80%-Wool Yarn, 20%-Cotton Yarn)\n"
-        "- Price: INR 450010\n"
-        "- Style: Traditional, Hand Knotted\n"
-        "- A desert rose colored antique that adds warmth and elegance."
-    )
+    content = "{{1}}\nTap below to view this rug on Jaipur Rugs."
+    example = "Desert Rose Rug - Hand-knotted Wool, 6x9 ft, INR 45000.\nTap below to view this rug on Jaipur Rugs."
     buttons = [
         {
             "type": "URL",
@@ -68,11 +58,6 @@ def build_template_payload() -> dict[str, Any]:
             "url": "https://www.jaipurrugs.com/{{1}}",
             "buttonValue": product_url,
             "example": [product_url],
-            "suffix": "{{1}}",
-        },
-        {
-            "type": "QUICK_REPLY",
-            "text": "Search More Rugs",
         },
     ]
 
@@ -85,7 +70,6 @@ def build_template_payload() -> dict[str, Any]:
         "content": content,
         "example": example,
         "enableSample": "true",
-        "allowTemplateCategoryChange": "true",
         "buttons": json.dumps(buttons),
     }
 
