@@ -35,24 +35,13 @@ def send_interactive_cta_message(phone_number: str, bot_response: dict):
         "apikey": qlink_gupshup_api_key,
     }
 
-    body_text = (bot_response.get("caption") or "")[:_MAX_BODY_LENGTH]
-    image_url = bot_response.get("image_url") or ""
-
-    interactive: dict = {
+    body_text = (bot_response.get("caption") or "Tap below to continue.")[:_MAX_BODY_LENGTH]
+    message_payload = {
+        "body": body_text,
         "type": "cta_url",
-        "body": {"text": body_text},
-        "action": {
-            "name": "cta_url",
-            "parameters": {
-                "display_text": bot_response.get("button_text", "View Product"),
-                "url": bot_response.get("button_url", ""),
-            },
-        },
+        "display_text": bot_response.get("button_text", "View Product"),
+        "url": bot_response.get("button_url", ""),
     }
-    if image_url:
-        interactive["header"] = {"type": "image", "image": {"link": image_url}}
-
-    message_payload = {"type": "interactive", "interactive": interactive}
 
     data = {
         "channel": "whatsapp",
