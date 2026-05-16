@@ -98,6 +98,9 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             caption = re.sub(r'\n\s*[-·•]\s*$', '', caption).strip()
             caption = _clean_for_whatsapp(caption)
             caption, product_url = _extract_cta(caption)
+            # clean again — _extract_cta can leave stray * markers or empty bullets
+            caption = re.sub(r'(?m)^\s*[-·•·]\s*[\*_]*\s*$', '', caption)
+            caption = _clean_for_whatsapp(caption)
             responses.append({"type": "image", "image_url": image_url, "caption": caption})
             if product_url:
                 responses.append({
