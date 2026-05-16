@@ -17,6 +17,15 @@ from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_response
 whatsapp_router = APIRouter()
 WHATSAPP_COLLECTION_NAME = "users_whatsapp"
 
+_IMAGE_NOT_SUPPORTED_RESPONSE = (
+    "I'm sorry, I'm not able to identify or process images at this time.\n\n"
+    "For assistance, please reach out to us:\n"
+    "- Email: shop@jaipurrugs.com\n"
+    "- India: +91 8000295928 (WhatsApp available)\n"
+    "- International: +91 7412 060 022 (WhatsApp available)"
+)
+_MEDIA_SENTINEL = "__MEDIA_MESSAGE__"
+
 _IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
 _MD_LINK_RE = re.compile(r'\[([^\]]+)\]\((https?://[^\)]+)\)')
 
@@ -53,6 +62,19 @@ def _extract_search_cta(text: str) -> tuple[str, str | None, str | None]:
     return text, None, None
 
 
+def _clean_for_whatsapp(text: str) -> str:
+    """Convert markdown formatting to WhatsApp-compatible text and strip artifacts."""
+    # Convert **bold** → *bold* (WhatsApp uses single asterisk for bold)
+    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
+    # Remove lines that are only asterisks or underscores (stray markers)
+    text = re.sub(r'(?m)^\s*[\*_]{1,3}\s*$', '', text)
+    # Remove trailing stray asterisks at end of string
+    text = re.sub(r'[\*_]+\s*$', '', text)
+    # Collapse 3+ blank lines into 2
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 def _build_whatsapp_responses(text: str) -> list[dict]:
     """Split bot text into WhatsApp messages.
 
@@ -74,7 +96,7 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             caption = _IMAGE_MD_RE.sub("", block)
             caption = re.sub(r'(?m)^\s*[-·•]\s*$', '', caption)
             caption = re.sub(r'\n\s*[-·•]\s*$', '', caption).strip()
-            caption = re.sub(r'\n{3,}', '\n\n', caption).strip()
+            caption = _clean_for_whatsapp(caption)
             caption, product_url = _extract_cta(caption)
             responses.append({"type": "image", "image_url": image_url, "caption": caption})
             if product_url:
@@ -96,7 +118,7 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
                     "button_text": btn_label,
                 }
             else:
-                pending_text.append(block)
+                pending_text.append(_clean_for_whatsapp(block))
 
     if pending_text:
         responses.append({"type": "text", "text": "\n\n".join(pending_text)})
@@ -136,6 +158,8 @@ def _extract_gupshup_message(request_data: dict) -> dict:
             or content.get("text")
             or content.get("postbackText", "")
         )
+    elif message_type in {"image", "video", "audio", "document", "sticker"}:
+        text = _MEDIA_SENTINEL
 
     phone = payload.get("source", "") or payload.get("sender", {}).get("phone", "")
     if not phone:
@@ -155,6 +179,9 @@ def _extract_username(whatsapp_event: dict, fallback_name: str = "") -> str:
 
 
 def _extract_user_message_text(message_payload: dict) -> str:
+    if message_payload.get("type") in {"image", "video", "audio", "document", "sticker"}:
+        return _MEDIA_SENTINEL
+
     text_body = message_payload.get("text", {}).get("body", "")
     if text_body:
         return text_body.strip()
@@ -212,6 +239,13 @@ async def _process_message(request_data: dict) -> None:
         if not phone_number or not user_text:
             logger.info("Skipping — missing phone or text",
                         extra={"phone_number": phone_number})
+            return
+
+        if user_text == _MEDIA_SENTINEL:
+            dispatch_whatsapp_responses(
+                phone_number=phone_number,
+                bot_responses=[{"type": "text", "text": _IMAGE_NOT_SUPPORTED_RESPONSE}],
+            )
             return
 
         session_id = phone_number.lower()

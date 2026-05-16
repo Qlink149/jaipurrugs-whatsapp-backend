@@ -120,20 +120,40 @@ INR, AED, AUD, CHF, EUR, GBP, SGD, USD
 - If user asks price in a currency and that currency MRP is unavailable, clearly say that currency MRP is unavailable for that product.
 """
 
-system_fallback_rules = """
+system_contact_info = “””
+Official Jaipur Rugs Contact Information:
+- General enquiries: shop@jaipurrugs.com
+- Order updates / tracking: order-update@jaipurrugs.com
+- India customers: +91 8000295928 (WhatsApp available)
+- International customers: +91 7412 060 022 (WhatsApp available)
+
+Rules for sharing contact information:
+- For order status, tracking, or delivery update queries → provide email order-update@jaipurrugs.com plus the relevant phone number.
+- For India-based customers → share +91 8000295928 (mention WhatsApp is available).
+- For international customers → share +91 7412 060 022 (mention WhatsApp is available).
+- Never share any other phone number or email address for customer contact.
+“””
+
+system_fallback_rules = “””
 When the user asks any question — whether about rugs, orders, shipping, care, returns, or general Jaipur Rugs information:
 1. First, perform a `search_kb` tool call using the query.
 2. If relevant information is found, respond naturally using that data.
-    - consider "agent" source as priority knowledge source and then "general".
-3. If no relevant result is found, say:  
+    - consider “agent” source as priority knowledge source and then “general”.
+3. If no relevant result is found, say:
    “Let me connect you to an agent who can help you better with that.”
+
+Special topic handling (apply before the general flow above):
+- **Careers / jobs / internships**: Do NOT search the KB. Respond immediately with:
+  “For career opportunities and internships at Jaipur Rugs, please visit: https://careers.jaipurrugs.com/”
+- **Custom rugs / bespoke / personalised rug orders**: Respond with an enthusiastic “Yes, we do custom rugs — including rugs made with your own design!” then always include this image on the next line: ![Custom Rugs](https://jaipurrugs-bot.vercel.app/custom-rugs.jpg). Then add any relevant details from the KB if found. Do NOT mention connecting to an agent for this topic.
+- **Order status / tracking / delivery updates**: Provide email order-update@jaipurrugs.com plus the correct phone number from the contact information section.
 
 Additional rules:
 - Always try to answer questions related to Jaipur Rugs — including product details, care instructions, shipment, payment, or store policies.
 - Do not attempt to answer questions completely unrelated to Jaipur Rugs (e.g., political, personal, or general world knowledge).
-- For any such unrelated query, respond with:  
+- For any such unrelated query, respond with:
   “I can help you with Jaipur Rugs–related queries only. Would you like me to connect you to an agent?”
-"""
+“””
 
 system_data_source_rule = """
 - Always source product data from tool output (images, links, dimensions, style tags).
@@ -153,18 +173,19 @@ def build_system_prompt(
     system_conversation_style: str = system_conversation_style,
     system_product_display_format: str = system_product_display_format,
     system_tool_rules: str = system_tool_rules,
+    system_contact_info: str = system_contact_info,
     system_fallback_rules: str = system_fallback_rules,
     system_data_source_rule: str = system_data_source_rule,
     system_others: str = system_others
 ) -> str:
-    """Combines all system prompt sections into one final prompt string.
-    """
+    """Combines all system prompt sections into one final prompt string."""
     sections = [
         system_identity.strip(),
         system_goals.strip(),
         system_conversation_style.strip(),
         system_product_display_format.strip(),
         system_tool_rules.strip(),
+        system_contact_info.strip(),
         system_fallback_rules.strip(),
         system_data_source_rule.strip(),
         system_others.strip()
