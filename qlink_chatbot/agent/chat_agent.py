@@ -187,7 +187,7 @@ async def chat_agent(
             {"role": "developer", "content": "When responding: do not add any narrative, status updates, waiting messages, politeness fillers, or redundant sentences. Either answer directly or call a tool directly."},
             {"role": "developer", "content": "When `jaipur_rugs_product_search` returns multiple products, include all returned products (up to 3) in the final user-visible response. Do not show only one unless only one was returned."},
             {"role": "developer", "content": "If the user asks price/size/material/weight/link for a previously shown rug, answer from Latest shown products context. For currency requests, use exact values from `mrp` for INR, AED, AUD, CHF, EUR, GBP, SGD, USD. Do not convert between currencies, do not estimate, and do not use exchange rates. If requested currency value is missing, clearly say it is unavailable."},
-            {"role": "developer", "content": "For any product-related response (recommendations, product details, price, size, material, SKU, or link), append this exact line at the very end of the message: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'"},
+            {"role": "developer", "content": "Only when the response contains actual rug results returned by the `jaipur_rugs_product_search` tool, append this exact line at the very end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'. Do NOT add it for cleaning, care, order, careers, custom rug, or any non-product response."},
             {"role": "user", "content": user_message}
         ]
 
