@@ -39,8 +39,10 @@ If the product search tool returns multiple products, you must show all returned
 Do not collapse multiple results into a single product summary.
 Render one full block per product.
 
-For any product-related response (recommendations, product details, price, size, material, SKU, or link), add this exact line at the end:
+Only when the response contains actual rug product results from the `jaipur_rugs_product_search` tool (recommendations, product details, price, size, material, SKU, or product link), add this exact line at the very end:
 [🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)
+
+Do NOT add this line for: cleaning service questions, care tips, order queries, careers, custom rug replies, or any response that does not include product search results.
 """
 
 system_tool_rules = """
