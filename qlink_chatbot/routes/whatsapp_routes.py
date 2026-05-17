@@ -85,6 +85,7 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
     responses: list[dict] = []
     pending_text: list[str] = []
     deferred_search_cta: dict | None = None
+    seen_product_urls: set[str] = set()
 
     for block in blocks:
         match = _IMAGE_MD_RE.search(block)
@@ -102,7 +103,8 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             caption = re.sub(r'(?m)^\s*[-·•·]\s*[\*_]*\s*$', '', caption)
             caption = _clean_for_whatsapp(caption)
             responses.append({"type": "image", "image_url": image_url, "caption": caption})
-            if product_url:
+            if product_url and product_url not in seen_product_urls:
+                seen_product_urls.add(product_url)
                 responses.append({
                     "type": "interactive_cta",
                     "button_url": product_url,

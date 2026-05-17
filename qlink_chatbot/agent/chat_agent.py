@@ -208,9 +208,11 @@ async def chat_agent(
         input_list += response.output
 
 
-        # Step 2: Handle tool calls
+        # Step 2: Handle tool calls — collect ALL outputs before calling model again
+        has_tool_calls = False
         for item in response.output:
             if item.type == "function_call":
+                has_tool_calls = True
                 args = json.loads(item.arguments)
                 output = ""
                 if item.name == "jaipur_rugs_product_search":
@@ -223,7 +225,7 @@ async def chat_agent(
                         collection_name=collection_name,
                     )
                     output = json.dumps(products)
-                    
+
                 elif item.name == "save_user_name":
                     name = args.get("name")
                     save_user_name(
@@ -256,16 +258,16 @@ async def chat_agent(
                     "output": output
                 })
 
+        # Step 3: Final model response — called ONCE after all tool outputs are collected
+        if has_tool_calls:
+            response = await client.responses.create(
+                model="gpt-4.1-mini",
+                instructions=system_prompt,
+                input=input_list,
+                text=output_schema
+            )
 
-                # Step 3: Final model response using tool output
-                response = await client.responses.create(
-                    model="gpt-4.1-mini",
-                    instructions=system_prompt,
-                    input=input_list,
-                    text=output_schema
-                )
-
-                logger.info("model response", extra={"response": response})
+            logger.info("model response", extra={"response": response})
 
         output = json.loads(response.output[0].content[0].text)
         return output.get("message")
