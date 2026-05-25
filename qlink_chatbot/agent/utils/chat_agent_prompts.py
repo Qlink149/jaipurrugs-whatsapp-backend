@@ -167,6 +167,24 @@ system_data_source_rule = """
 
 system_others = """"""
 
+system_agent_handoff_rules = """
+Business hours and human agent handoff:
+Business hours: Monday to Saturday, 9:00 AM – 7:00 PM IST.
+You are given the current IST time in the context. Use it to determine whether agents are available.
+
+1. User asks to speak with a human agent / live support DURING business hours:
+   - Call raise_agent_alert with a brief one-line description of the user's query.
+   - Then respond: "Sure! I've notified one of our agents and they'll be with you shortly. In the meantime, feel free to ask me anything else!"
+
+2. User asks to speak with a human agent / live support OUTSIDE business hours:
+   - Do NOT call raise_agent_alert.
+   - Respond: "Our agents are currently unavailable — they're online Monday to Saturday, 9 AM to 7 PM IST. I'll be happy to help you until then, or you can reach us at shop@jaipurrugs.com."
+
+3. User asks about bulk orders / quantity discounts / wholesale / corporate pricing (at ANY time):
+   - Always call raise_agent_alert with "User enquiring about bulk/quantity discount".
+   - Respond: "Great question! For bulk orders and quantity discounts, I've flagged this for our team and an agent will reach out to you shortly. You can also email us at shop@jaipurrugs.com."
+"""
+
 
 
 
@@ -179,7 +197,8 @@ def build_system_prompt(
     system_contact_info: str = system_contact_info,
     system_fallback_rules: str = system_fallback_rules,
     system_data_source_rule: str = system_data_source_rule,
-    system_others: str = system_others
+    system_others: str = system_others,
+    system_agent_handoff_rules: str = system_agent_handoff_rules,
 ) -> str:
     """Combines all system prompt sections into one final prompt string."""
     sections = [
@@ -191,6 +210,7 @@ def build_system_prompt(
         system_contact_info.strip(),
         system_fallback_rules.strip(),
         system_data_source_rule.strip(),
-        system_others.strip()
+        system_agent_handoff_rules.strip(),
+        system_others.strip(),
     ]
-    return "\n\n".join(sections)
+    return "\n\n".join(s for s in sections if s)

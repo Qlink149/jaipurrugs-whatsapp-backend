@@ -13,6 +13,7 @@ from qlink_chatbot.database.mongo_utils import (
 )
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_responses
+from qlink_chatbot.whatsapp_functions.send_typing_indicator import send_typing_indicator
 
 whatsapp_router = APIRouter()
 WHATSAPP_COLLECTION_NAME = "users_whatsapp"
@@ -268,6 +269,13 @@ async def _process_message(request_data: dict) -> None:
 
         save_message(session_id=session_id, role="user", content=user_text,
                      collection_name=WHATSAPP_COLLECTION_NAME)
+
+        if not session.get("is_ai", True):
+            logger.info("Human agent active — skipping AI response",
+                        extra={"phone_number": phone_number})
+            return
+
+        send_typing_indicator(phone_number=phone_number)
 
         bot_text = await chat_agent(
             chat_history=session.get("chat_history", []),
