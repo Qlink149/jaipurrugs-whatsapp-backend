@@ -10,6 +10,7 @@ from qlink_chatbot.database.mongo_utils import (
     get_session_by_id,
     save_message,
     save_user_name,
+    whatsapp_status_events_collection,
 )
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_responses
@@ -106,15 +107,19 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
             # clean again — _extract_cta can leave stray * markers or empty bullets
             caption = re.sub(r'(?m)^\s*[-·•·]\s*[\*_]*\s*$', '', caption)
             caption = _clean_for_whatsapp(caption)
-            responses.append({"type": "image", "image_url": image_url, "caption": caption})
             if product_url and product_url not in seen_product_urls:
                 seen_product_urls.add(product_url)
+                # Merge image + View Product button into ONE interactive message
+                # so image and button always arrive together in correct order
                 responses.append({
                     "type": "interactive_cta",
+                    "image_url": image_url,
                     "button_url": product_url,
-                    "caption": "Tap below to view this rug on Jaipur Rugs.",
+                    "caption": caption or "Tap below to view this rug on Jaipur Rugs.",
                     "button_text": "View Product",
                 })
+            else:
+                responses.append({"type": "image", "image_url": image_url, "caption": caption})
         else:
             cleaned, search_url, btn_label = _extract_search_cta(block)
             if search_url:
@@ -235,6 +240,19 @@ async def _process_message(request_data: dict) -> None:
         statuses = whatsapp_event.get("statuses", [])
         if statuses:
             status = statuses[0].get("type") or statuses[0].get("status")
+            try:
+                whatsapp_status_events_collection.insert_one(
+                    {
+                        "status": status,
+                        "statuses": statuses,
+                        "raw_event": whatsapp_event,
+                    }
+                )
+            except Exception as status_save_error:
+                logger.warning(
+                    "Failed to persist WhatsApp status callback",
+                    extra={"error": str(status_save_error)},
+                )
             logger.info(
                 "Ignoring status callback",
                 extra={"status": status, "statuses": statuses},

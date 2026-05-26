@@ -2,6 +2,7 @@ import json
 
 import httpx
 
+from qlink_chatbot.database.mongo_utils import whatsapp_outbound_events_collection
 from qlink_chatbot.utils.env_load import (
     default_country_code,
     qlink_gupshup_app_id,
@@ -20,8 +21,26 @@ def _normalize_destination(phone_number: str) -> str:
     return digits
 
 
+def _save_outbound_event(phone_number: str, response_type: str, status: str, details: dict):
+    try:
+        whatsapp_outbound_events_collection.insert_one(
+            {
+                "phone_number": phone_number,
+                "response_type": response_type,
+                "status": status,
+                "details": details,
+            }
+        )
+    except Exception as e:
+        logger.warning("Failed to persist outbound event", extra={"error": str(e)})
+
+
 def send_interactive_cta_message(phone_number: str, bot_response: dict):
-    """Send an interactive CTA URL button message with an image header."""
+    """Send an interactive CTA URL button message, optionally with an image header.
+
+    If bot_response contains image_url, the image is sent as the message header
+    so image and button arrive as one atomic message (no ordering race condition).
+    """
     logger.info(
         "Sending interactive CTA message",
         extra={"phone_number": phone_number, "bot_response": bot_response},
@@ -50,6 +69,14 @@ def send_interactive_cta_message(phone_number: str, bot_response: dict):
         },
     }
 
+    # Attach image as header if provided — keeps image + button in one message
+    image_url = bot_response.get("image_url")
+    if image_url:
+        interactive_payload["header"] = {
+            "type": "image",
+            "image": {"link": image_url},
+        }
+
     data = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -61,12 +88,35 @@ def send_interactive_cta_message(phone_number: str, bot_response: dict):
     try:
         response = httpx.post(url, headers=headers, data=data)
         response.raise_for_status()
+        response_payload = response.json()
+        _save_outbound_event(
+            phone_number,
+            "interactive_cta",
+            "submitted",
+            {
+                "status_code": response.status_code,
+                "response": response_payload,
+                "destination": destination,
+            },
+        )
         logger.info(
             "Interactive CTA message sent",
-            extra={"phone_number": phone_number, "response": response.json()},
+            extra={"phone_number": phone_number, "response": response_payload},
         )
-        return response.json()
+        return response_payload
     except Exception as e:
+        response = getattr(e, "response", None)
+        _save_outbound_event(
+            phone_number,
+            "interactive_cta",
+            "error",
+            {
+                "error": str(e),
+                "status_code": getattr(response, "status_code", None),
+                "response": getattr(response, "text", "")[:1000] if response else "",
+                "destination": destination,
+            },
+        )
         logger.error(
             "Error sending interactive CTA message",
             extra={"phone_number": phone_number, "error": str(e)},
