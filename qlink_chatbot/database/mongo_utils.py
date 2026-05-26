@@ -19,6 +19,8 @@ internal_collection = db["internals"]
 agent_alerts = db["agent_alerts"]
 agents_profile = db["agents"]
 inventory_cache_collection = db["inventory_cache"]
+whatsapp_outbound_events_collection = db["whatsapp_outbound_events"]
+whatsapp_status_events_collection = db["whatsapp_status_events"]
 
 
 def _get_sessions_collection(collection_name: str = "users"):

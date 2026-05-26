@@ -2,6 +2,7 @@ import json
 
 import httpx
 
+from qlink_chatbot.database.mongo_utils import whatsapp_outbound_events_collection
 from qlink_chatbot.utils.env_load import (
     default_country_code,
     qlink_gupshup_app_id,
@@ -17,6 +18,20 @@ def _normalize_destination(phone_number: str) -> str:
     if len(digits) == 10:
         return f"{default_country_code}{digits}"
     return digits
+
+
+def _save_outbound_event(phone_number: str, response_type: str, status: str, details: dict):
+    try:
+        whatsapp_outbound_events_collection.insert_one(
+            {
+                "phone_number": phone_number,
+                "response_type": response_type,
+                "status": status,
+                "details": details,
+            }
+        )
+    except Exception as e:
+        logger.warning("Failed to persist outbound event", extra={"error": str(e)})
 
 
 def send_image_message(phone_number: str, bot_response: dict):
@@ -51,15 +66,38 @@ def send_image_message(phone_number: str, bot_response: dict):
     try:
         response = httpx.post(url, headers=headers, data=data)
         response.raise_for_status()
+        response_payload = response.json()
+        _save_outbound_event(
+            phone_number,
+            "image",
+            "submitted",
+            {
+                "status_code": response.status_code,
+                "response": response_payload,
+                "destination": destination,
+            },
+        )
         logger.info(
             "Image message sent successfully",
             extra={
                 "phone_number": phone_number,
-                "response": response.json(),
+                "response": response_payload,
             },
         )
-        return response.json()
+        return response_payload
     except Exception as e:
+        response = getattr(e, "response", None)
+        _save_outbound_event(
+            phone_number,
+            "image",
+            "error",
+            {
+                "error": str(e),
+                "status_code": getattr(response, "status_code", None),
+                "response": getattr(response, "text", "")[:1000] if response else "",
+                "destination": destination,
+            },
+        )
         logger.error(
             "Error in sending image message",
             extra={"phone_number": phone_number, "error": str(e)},
