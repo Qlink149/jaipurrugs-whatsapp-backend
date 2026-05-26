@@ -174,6 +174,7 @@ def _extract_gupshup_message(request_data: dict) -> dict:
         "from": phone,
         "text": (text or "").strip(),
         "name": (payload.get("sender") or {}).get("name", ""),
+        "message_id": payload.get("id", "") or content.get("id", ""),
     }
 
 
@@ -233,11 +234,13 @@ async def _process_message(request_data: dict) -> None:
             phone_number = gupshup_message.get("from", "")
             whatsapp_username = gupshup_message.get("name", "")
             user_text = gupshup_message.get("text", "")
+            message_id = gupshup_message.get("message_id", "")
         elif incoming_messages:
             incoming_message = incoming_messages[0]
             phone_number = incoming_message.get("from", "")
             whatsapp_username = _extract_username(whatsapp_event)
             user_text = _extract_user_message_text(incoming_message)
+            message_id = incoming_message.get("id", "")
         else:
             logger.info("No incoming messages in webhook payload")
             return
@@ -276,7 +279,7 @@ async def _process_message(request_data: dict) -> None:
             return
 
         stop_typing = asyncio.Event()
-        typing_task = asyncio.create_task(typing_indicator_loop(phone_number, stop_typing))
+        typing_task = asyncio.create_task(typing_indicator_loop(message_id, stop_typing))
         try:
             bot_text = await chat_agent(
                 chat_history=session.get("chat_history", []),
