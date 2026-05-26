@@ -4,13 +4,13 @@ import httpx
 
 from qlink_chatbot.utils.env_load import (
     default_country_code,
-    qlink_gupshup_api_key,
-    qlink_gupshup_app_name,
-    qlink_gupshup_source,
+    qlink_gupshup_app_id,
+    qlink_gupshup_partner_app_token,
 )
 from qlink_chatbot.utils.logger_config import logger
 
 _MAX_BODY_LENGTH = 1024
+PARTNER_BASE_URL = "https://partner.gupshup.io"
 
 
 def _normalize_destination(phone_number: str) -> str:
@@ -28,31 +28,39 @@ def send_interactive_cta_message(phone_number: str, bot_response: dict):
     )
 
     destination = _normalize_destination(phone_number=phone_number)
-    url = "https://api.gupshup.io/wa/api/v1/msg"
+    url = f"{PARTNER_BASE_URL}/partner/app/{qlink_gupshup_app_id}/v3/message"
 
     headers = {
+        "Accept": "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
-        "apikey": qlink_gupshup_api_key,
+        "Authorization": qlink_gupshup_partner_app_token,
+        "token": qlink_gupshup_partner_app_token,
     }
 
     body_text = (bot_response.get("caption") or "Tap below to continue.")[:_MAX_BODY_LENGTH]
-    message_payload = {
-        "body": body_text,
+    interactive_payload = {
         "type": "cta_url",
-        "display_text": bot_response.get("button_text", "View Product"),
-        "url": bot_response.get("button_url", ""),
+        "body": {"text": body_text},
+        "action": {
+            "name": "cta_url",
+            "parameters": {
+                "display_text": bot_response.get("button_text", "View Product"),
+                "url": bot_response.get("button_url", ""),
+            },
+        },
     }
 
     data = {
-        "channel": "whatsapp",
-        "source": qlink_gupshup_source,
-        "destination": destination,
-        "message": json.dumps(message_payload),
-        "src.name": qlink_gupshup_app_name,
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": destination,
+        "type": "interactive",
+        "interactive": json.dumps(interactive_payload),
     }
 
     try:
         response = httpx.post(url, headers=headers, data=data)
+        response.raise_for_status()
         logger.info(
             "Interactive CTA message sent",
             extra={"phone_number": phone_number, "response": response.json()},
