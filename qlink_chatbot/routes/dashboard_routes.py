@@ -17,7 +17,7 @@ from qlink_chatbot.database.mongo_utils import (
     whatsapp_sessions_collection,
 )
 from qlink_chatbot.utils.jr_api_client import get_all_products as _jr_get_all_products
-from qlink_chatbot.utils.env_load import gupshup_source
+from qlink_chatbot.utils.env_load import qlink_gupshup_source
 from qlink_chatbot.utils.jaipur_rugs_api import products_collection as website_products_collection
 from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_responses
 
@@ -101,7 +101,7 @@ def get_stats():
         "total_messages": inbound + outbound,
         "inbound_messages": inbound,
         "outbound_messages": outbound,
-        "whatsapp_number": gupshup_source,
+        "whatsapp_number": qlink_gupshup_source,
     }
 
 

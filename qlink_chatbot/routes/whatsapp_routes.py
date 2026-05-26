@@ -13,7 +13,10 @@ from qlink_chatbot.database.mongo_utils import (
 )
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_responses
-from qlink_chatbot.whatsapp_functions.send_typing_indicator import typing_indicator_loop
+from qlink_chatbot.whatsapp_functions.send_typing_indicator import (
+    send_typing_indicator,
+    typing_indicator_loop,
+)
 
 whatsapp_router = APIRouter()
 WHATSAPP_COLLECTION_NAME = "users_whatsapp"
@@ -133,6 +136,15 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
         responses.append(deferred_search_cta)
 
     return responses or [{"type": "text", "text": text}]
+
+
+def _has_product_send(responses: list[dict]) -> bool:
+    product_response_types = {"image", "interactive_cta", "product_template", "text_with_image"}
+    return any(
+        isinstance(response, dict)
+        and response.get("type") in product_response_types
+        for response in responses
+    )
 
 
 def _extract_event(request_data: dict) -> dict:
@@ -302,6 +314,8 @@ async def _process_message(request_data: dict) -> None:
                      collection_name=WHATSAPP_COLLECTION_NAME)
 
         responses = _build_whatsapp_responses(bot_text)
+        if _has_product_send(responses):
+            await send_typing_indicator(message_id)
         dispatch_whatsapp_responses(phone_number=phone_number, bot_responses=responses)
 
     except Exception as e:
