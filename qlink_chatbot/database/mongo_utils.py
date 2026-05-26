@@ -81,20 +81,24 @@ def create_session(
     name: str,
     is_ai: bool = True,
     collection_name: str = "users",
+    geo: dict | None = None,
 ):
     """Create a new user session."""
     try:
         now = datetime.utcnow()
         session_collection = _get_sessions_collection(collection_name=collection_name)
-        session_collection.insert_one({
+        doc = {
             "session_id": session_id,
             "country_code": country_code,
             "is_ai": is_ai,
             "created_at": now,
             "updated_at": now,
             "user_name": name,
-            "chat_history": []
-        })
+            "chat_history": [],
+        }
+        if geo:
+            doc["geo"] = geo
+        session_collection.insert_one(doc)
         logger.info(f"Session created: {session_id}")
     except Exception as e:
         logger.error("Error creating session", extra={"error": e})
