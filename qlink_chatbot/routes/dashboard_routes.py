@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -30,6 +31,53 @@ catalog_designs_collection = whatsapp_sessions_collection.database["catalog_desi
 AGENT_TAKEOVER_MESSAGE = (
     "Thank you. Our rug specialist will assist you further over a call/message."
 )
+INSIGHT_COLORS = [
+    "red",
+    "blue",
+    "green",
+    "grey",
+    "gray",
+    "black",
+    "white",
+    "pink",
+    "beige",
+    "ivory",
+    "brown",
+    "gold",
+    "yellow",
+    "orange",
+    "purple",
+    "cream",
+    "natural",
+]
+INSIGHT_STOP_WORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "have",
+    "want",
+    "need",
+    "show",
+    "please",
+    "rug",
+    "rugs",
+    "carpet",
+    "jaipur",
+    "price",
+    "hello",
+    "hi",
+    "you",
+    "can",
+    "are",
+    "any",
+    "all",
+    "like",
+    "more",
+}
 
 
 def _jsonable(value):
@@ -57,6 +105,50 @@ def _message_type(content: str) -> str:
     if lower.startswith("[template]"):
         return "template"
     return "text"
+
+
+def _most_common(counter: Counter, fallback: str = "N/A") -> str:
+    return counter.most_common(1)[0][0] if counter else fallback
+
+
+def _country_from_phone(phone: str) -> str:
+    value = re.sub(r"\D", "", phone or "")
+    if value.startswith("91"):
+        return "India"
+    if value.startswith("1"):
+        return "US/Canada"
+    if value.startswith("44"):
+        return "United Kingdom"
+    if value.startswith("971"):
+        return "UAE"
+    if value.startswith("61"):
+        return "Australia"
+    return ""
+
+
+def _session_location(session: dict) -> str:
+    geo = session.get("geo") or {}
+    return (
+        session.get("country_code")
+        or geo.get("country")
+        or geo.get("country_code")
+        or _country_from_phone(session.get("session_id", ""))
+    )
+
+
+def _track_keyword_candidates(content: str, keyword_counter: Counter) -> None:
+    text = re.sub(r"https?://\S+", " ", content.lower())
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    for word in text.split():
+        if len(word) > 2 and word not in INSIGHT_STOP_WORDS:
+            keyword_counter[word] += 1
+
+
+def _track_color_mentions(content: str, color_counter: Counter) -> None:
+    text = content.lower()
+    for color in INSIGHT_COLORS:
+        if re.search(rf"\b{re.escape(color)}\b", text):
+            color_counter["grey" if color == "gray" else color] += 1
 
 
 def _session_to_conversation(session: dict) -> dict:
@@ -112,7 +204,7 @@ def get_stats():
 
 @dashboard_router.get("/dashboard/insights")
 def get_dashboard_insights():
-    """Return overview cards and lightweight insights for the admin dashboard."""
+    """Return overview cards and DB-backed insights for the admin dashboard."""
     sessions = list(whatsapp_sessions_collection.find({}))
     now = datetime.utcnow()
     active_cutoff = now - timedelta(minutes=30)
@@ -129,11 +221,7 @@ def get_dashboard_insights():
         if isinstance(updated_at, datetime) and updated_at >= active_cutoff:
             session["_is_recently_active"] = True
 
-        location = (
-            session.get("country_code")
-            or (session.get("geo") or {}).get("country")
-            or (session.get("geo") or {}).get("country_code")
-        )
+        location = _session_location(session)
         if location:
             location_counter[str(location)] += 1
 
@@ -143,10 +231,12 @@ def get_dashboard_insights():
                 keyword_counter[str(keyword).strip().lower()] += 1
 
         for message in session.get("chat_history") or []:
+            content = str(message.get("content") or "")
             total_messages += 1
             role = message.get("role")
             if role == "user":
                 inbound_messages += 1
+                _track_keyword_candidates(content, keyword_counter)
             else:
                 outbound_messages += 1
 
@@ -154,10 +244,7 @@ def get_dashboard_insights():
             if isinstance(timestamp, datetime):
                 hour_counter[timestamp.strftime("%I %p")] += 1
 
-            content = str(message.get("content") or "").lower()
-            for color in ["red", "blue", "green", "grey", "gray", "black", "white", "pink", "beige", "ivory", "brown"]:
-                if color in content:
-                    color_counter["grey" if color == "gray" else color] += 1
+            _track_color_mentions(content, color_counter)
 
     active_users = sum(1 for session in sessions if session.get("_is_recently_active"))
 
@@ -171,10 +258,10 @@ def get_dashboard_insights():
             "outbound_messages": outbound_messages,
         },
         "insights": {
-            "most_searched_keyword": keyword_counter.most_common(1)[0][0] if keyword_counter else "N/A",
-            "active_time": hour_counter.most_common(1)[0][0] if hour_counter else "N/A",
-            "highest_traffic_location": location_counter.most_common(1)[0][0] if location_counter else "N/A",
-            "highest_interested_color": color_counter.most_common(1)[0][0] if color_counter else "N/A",
+            "most_searched_keyword": _most_common(keyword_counter),
+            "active_time": _most_common(hour_counter),
+            "highest_traffic_location": _most_common(location_counter),
+            "highest_interested_color": _most_common(color_counter),
         },
     }
 
