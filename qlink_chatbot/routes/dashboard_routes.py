@@ -1,6 +1,7 @@
 import json
 import os
-from datetime import datetime
+from collections import Counter
+from datetime import datetime, timedelta
 
 from bson import ObjectId
 from fastapi import APIRouter, Body, File, Form, Header, HTTPException, UploadFile
@@ -106,6 +107,75 @@ def get_stats():
         "inbound_messages": inbound,
         "outbound_messages": outbound,
         "whatsapp_number": qlink_gupshup_source,
+    }
+
+
+@dashboard_router.get("/dashboard/insights")
+def get_dashboard_insights():
+    """Return overview cards and lightweight insights for the admin dashboard."""
+    sessions = list(whatsapp_sessions_collection.find({}))
+    now = datetime.utcnow()
+    active_cutoff = now - timedelta(minutes=30)
+    total_messages = 0
+    inbound_messages = 0
+    outbound_messages = 0
+    keyword_counter = Counter()
+    hour_counter = Counter()
+    location_counter = Counter()
+    color_counter = Counter()
+
+    for session in sessions:
+        updated_at = session.get("updated_at") or session.get("created_at")
+        if isinstance(updated_at, datetime) and updated_at >= active_cutoff:
+            session["_is_recently_active"] = True
+
+        location = (
+            session.get("country_code")
+            or (session.get("geo") or {}).get("country")
+            or (session.get("geo") or {}).get("country_code")
+        )
+        if location:
+            location_counter[str(location)] += 1
+
+        for previous_search in session.get("previous_searches") or []:
+            keyword = previous_search.get("keyword")
+            if keyword:
+                keyword_counter[str(keyword).strip().lower()] += 1
+
+        for message in session.get("chat_history") or []:
+            total_messages += 1
+            role = message.get("role")
+            if role == "user":
+                inbound_messages += 1
+            else:
+                outbound_messages += 1
+
+            timestamp = message.get("timestamp")
+            if isinstance(timestamp, datetime):
+                hour_counter[timestamp.strftime("%I %p")] += 1
+
+            content = str(message.get("content") or "").lower()
+            for color in ["red", "blue", "green", "grey", "gray", "black", "white", "pink", "beige", "ivory", "brown"]:
+                if color in content:
+                    color_counter["grey" if color == "gray" else color] += 1
+
+    active_users = sum(1 for session in sessions if session.get("_is_recently_active"))
+
+    return {
+        "overview": {
+            "active_users": active_users,
+            "total_users": len(sessions),
+            "total_leads": len(sessions),
+            "total_messages": total_messages,
+            "inbound_messages": inbound_messages,
+            "outbound_messages": outbound_messages,
+        },
+        "insights": {
+            "most_searched_keyword": keyword_counter.most_common(1)[0][0] if keyword_counter else "N/A",
+            "active_time": hour_counter.most_common(1)[0][0] if hour_counter else "N/A",
+            "highest_traffic_location": location_counter.most_common(1)[0][0] if location_counter else "N/A",
+            "highest_interested_color": color_counter.most_common(1)[0][0] if color_counter else "N/A",
+        },
     }
 
 
