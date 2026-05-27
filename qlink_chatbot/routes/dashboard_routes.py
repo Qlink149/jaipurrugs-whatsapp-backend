@@ -26,6 +26,9 @@ dashboard_router = APIRouter(prefix="/api")
 
 manual_products_collection = whatsapp_sessions_collection.database["dashboard_products"]
 catalog_designs_collection = whatsapp_sessions_collection.database["catalog_designs"]
+AGENT_TAKEOVER_MESSAGE = (
+    "Thank you. Our rug specialist will assist you further over a call/message."
+)
 
 
 def _jsonable(value):
@@ -169,6 +172,38 @@ def send_whatsapp_message(payload: dict = Body(...)):
         upsert=True,
     )
     return {"success": True}
+
+
+@dashboard_router.post("/conversations/{phone}/takeover")
+def takeover_conversation(phone: str):
+    """Switch a WhatsApp conversation to human-agent mode and notify the customer."""
+    normalized_phone = phone.strip().lower()
+    if not normalized_phone:
+        raise HTTPException(status_code=400, detail="phone is required")
+
+    session = whatsapp_sessions_collection.find_one({"session_id": normalized_phone})
+    if not session:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    now = datetime.utcnow()
+    whatsapp_sessions_collection.update_one(
+        {"session_id": normalized_phone},
+        {
+            "$set": {"is_ai": False, "updated_at": now},
+            "$push": {
+                "chat_history": {
+                    "role": "agent",
+                    "content": AGENT_TAKEOVER_MESSAGE,
+                    "timestamp": now,
+                }
+            },
+        },
+    )
+    dispatch_whatsapp_responses(
+        phone_number=normalized_phone,
+        bot_responses=[{"type": "text", "text": AGENT_TAKEOVER_MESSAGE}],
+    )
+    return {"phone": normalized_phone, "is_ai": False, "message": AGENT_TAKEOVER_MESSAGE}
 
 
 @dashboard_router.get("/prompt")
