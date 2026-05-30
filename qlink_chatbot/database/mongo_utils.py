@@ -91,19 +91,76 @@ def create_session(
         session_collection = _get_sessions_collection(collection_name=collection_name)
         doc = {
             "session_id": session_id,
-            "country_code": country_code,
-            "is_ai": is_ai,
             "created_at": now,
-            "updated_at": now,
-            "user_name": name,
             "chat_history": [],
         }
         if geo:
             doc["geo"] = geo
-        session_collection.insert_one(doc)
+        set_fields = {
+            "country_code": country_code,
+            "is_ai": is_ai,
+            "updated_at": now,
+            "user_name": name,
+        }
+        if geo:
+            set_fields["geo"] = geo
+        session_collection.update_one(
+            {"session_id": session_id},
+            {
+                "$setOnInsert": doc,
+                "$set": set_fields,
+            },
+            upsert=True,
+        )
         logger.info(f"Session created: {session_id}")
     except Exception as e:
         logger.error("Error creating session", extra={"error": e})
+        raise e
+
+
+def update_visitor_insights(
+    session_id: str,
+    insights: dict,
+    browsing_event: dict | None = None,
+):
+    """Store visitor metadata against a web chat session."""
+    try:
+        now = datetime.utcnow()
+        insight_fields = {
+            f"visitor_insights.{key}": value
+            for key, value in insights.items()
+            if key != "browsing_history"
+        }
+        update = {
+            "$set": {
+                **insight_fields,
+                "updated_at": now,
+            },
+            "$setOnInsert": {
+                "session_id": session_id,
+                "country_code": insights.get("country_code", ""),
+                "is_ai": True,
+                "created_at": now,
+                "user_name": insights.get("user_name") or "Visitor",
+                "chat_history": [],
+            },
+        }
+
+        if browsing_event:
+            update["$push"] = {
+                "visitor_insights.browsing_history": {
+                    **browsing_event,
+                    "recorded_at": now,
+                }
+            }
+
+        sessions_collection.update_one(
+            {"session_id": session_id},
+            update,
+            upsert=True,
+        )
+    except Exception as e:
+        logger.error("Error updating visitor insights", extra={"error": e})
         raise e
 
 def update_session_country(session_id: str, country_code: str):

@@ -15,7 +15,8 @@ from qlink_chatbot.database.mongo_utils import (
     list_all_alerts,
     return_system_prompt,
     update_system_prompt,
-    agent_login
+    agent_login,
+    update_visitor_insights,
 )
 from qlink_chatbot.database.pinecone_utils import (
     chunk_text,
@@ -53,6 +54,91 @@ async def geo_check(request: Request, ip: str = ""):
     target_ip = ip or request.client.host
     result = await get_geo(target_ip)
     return {"ip": target_ip, **result}
+
+
+def _request_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip", "")
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else ""
+
+
+def _traffic_source(referrer: str) -> str:
+    referrer = (referrer or "").lower()
+    if not referrer:
+        return "Direct"
+    if "google." in referrer:
+        return "Google"
+    if "instagram." in referrer:
+        return "Instagram"
+    if "facebook." in referrer or "fb." in referrer:
+        return "Facebook"
+    if "bing." in referrer:
+        return "Bing"
+    if "jaipurrugs.com" in referrer:
+        return "Jaipur Rugs Website"
+    return "Referral"
+
+
+@general_router.post("/visitor-insights/{session_id}")
+async def save_visitor_insights(session_id: str, request: Request, payload: dict = Body(...)):
+    """Store web visitor context for the live-chat dashboard."""
+    try:
+        from qlink_chatbot.utils.geo_utils import get_geo
+
+        normalized_session_id = session_id.lower()
+        client_ip = _request_ip(request)
+        geo = await get_geo(client_ip)
+        referrer = payload.get("referrer") or ""
+        current_page = payload.get("current_page") or ""
+        event_type = payload.get("event_type") or "page_view"
+
+        insights = {
+            "visitor_id": payload.get("visitor_id") or "",
+            "user_name": payload.get("user_name") or "",
+            "current_page": current_page,
+            "current_page_title": payload.get("current_page_title") or "",
+            "referrer": referrer,
+            "traffic_source": payload.get("traffic_source") or _traffic_source(referrer),
+            "visit_count": int(payload.get("visit_count") or 1),
+            "chat_count": int(payload.get("chat_count") or 1),
+            "visitor_type": "Returning visitor"
+            if int(payload.get("visit_count") or 1) > 1
+            else "First-time visitor",
+            "chat_started_at": payload.get("chat_started_at") or "",
+            "last_seen_at": payload.get("last_seen_at") or "",
+            "chat_duration_seconds": int(payload.get("chat_duration_seconds") or 0),
+            "ip_address": client_ip,
+            "city": geo.get("city") or "",
+            "country": geo.get("country") or "",
+            "country_code": geo.get("country_code") or payload.get("country_code") or "",
+            "currency": geo.get("currency") or "",
+            "user_agent": request.headers.get("user-agent", ""),
+        }
+
+        browsing_event = None
+        if event_type != "heartbeat" and current_page:
+            browsing_event = {
+                "event_type": event_type,
+                "page": current_page,
+                "title": payload.get("current_page_title") or "",
+                "referrer": referrer,
+                "traffic_source": insights["traffic_source"],
+                "at": payload.get("last_seen_at") or "",
+            }
+
+        update_visitor_insights(
+            normalized_session_id,
+            insights=insights,
+            browsing_event=browsing_event,
+        )
+        return {"success": True, "visitor_insights": insights}
+    except Exception as e:
+        logger.error("Error saving visitor insights", extra={"error": str(e)})
+        return JSONResponse({"error": "Failed to save visitor insights"}, status_code=500)
 
 @general_router.post("/login")
 async def agent_login_route(payload: dict):
