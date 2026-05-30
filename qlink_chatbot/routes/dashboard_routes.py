@@ -16,6 +16,7 @@ from qlink_chatbot.agent.utils.chat_agent_prompts import (
 )
 from qlink_chatbot.database.mongo_utils import (
     internal_collection,
+    mark_handoff_attended,
     toggle_ai,
     whatsapp_sessions_collection,
 )
@@ -380,6 +381,7 @@ def takeover_conversation(phone: str):
         phone_number=normalized_phone,
         bot_responses=[{"type": "text", "text": message}],
     )
+    mark_handoff_attended(normalized_phone)
     return {"phone": normalized_phone, "is_ai": False, "message": message}
 
 

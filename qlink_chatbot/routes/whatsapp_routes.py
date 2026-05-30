@@ -10,6 +10,7 @@ from qlink_chatbot.database.mongo_utils import (
     get_session_by_id,
     save_message,
     save_user_name,
+    try_mark_whatsapp_message_processed,
     whatsapp_status_events_collection,
 )
 from qlink_chatbot.utils.logger_config import logger
@@ -279,6 +280,17 @@ async def _process_message(request_data: dict) -> None:
         if not phone_number or not user_text:
             logger.info("Skipping — missing phone or text",
                         extra={"phone_number": phone_number})
+            return
+
+        if not try_mark_whatsapp_message_processed(
+            message_id=message_id,
+            phone=phone_number,
+            message_text=user_text,
+        ):
+            logger.info(
+                "Skipping duplicate WhatsApp message",
+                extra={"phone_number": phone_number, "message_id": message_id},
+            )
             return
 
         if user_text == _MEDIA_SENTINEL:

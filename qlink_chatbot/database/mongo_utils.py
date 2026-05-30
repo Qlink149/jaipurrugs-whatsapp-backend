@@ -21,6 +21,8 @@ agents_profile = db["agents"]
 inventory_cache_collection = db["inventory_cache"]
 whatsapp_outbound_events_collection = db["whatsapp_outbound_events"]
 whatsapp_status_events_collection = db["whatsapp_status_events"]
+whatsapp_processed_messages_collection = db["whatsapp_processed_messages"]
+handoff_requests_collection = db["handoff_requests"]
 
 
 def _get_sessions_collection(collection_name: str = "users"):
@@ -372,13 +374,47 @@ def update_system_prompt(
 def raise_alert(session_id: str, alert_body: str):
     """Raise alert when ai esclate query to the agent."""
     try:
+        now = int(time.time())
+        waiting_count = handoff_requests_collection.count_documents(
+            {"status": "waiting"}
+        )
+        queue_position = waiting_count + 1
+        eta_minutes = max(5, queue_position * 5)
+
+        handoff_requests_collection.update_one(
+            {"session_id": session_id, "status": "waiting"},
+            {
+                "$setOnInsert": {
+                    "session_id": session_id,
+                    "created_at": now,
+                    "status": "waiting",
+                    "callback_requested": False,
+                },
+                "$set": {
+                    "alert": alert_body,
+                    "updated_at": now,
+                    "queue_position": queue_position,
+                    "eta_minutes": eta_minutes,
+                },
+            },
+            upsert=True,
+        )
+
         result = agent_alerts.insert_one(
             {
                 "session_id": session_id,
                 "alert": alert_body,
-                "created_at": int(time.time())
+                "created_at": now,
+                "queue_position": queue_position,
+                "eta_minutes": eta_minutes,
+                "status": "waiting",
             }
         )
+        return {
+            "status": "success",
+            "queue_position": queue_position,
+            "eta_minutes": eta_minutes,
+        }
     except Exception as e:
         logger.error(
             "Error raising agent alert.",
@@ -387,6 +423,55 @@ def raise_alert(session_id: str, alert_body: str):
             }
         )
         raise e
+
+
+def try_mark_whatsapp_message_processed(
+    message_id: str,
+    phone: str,
+    message_text: str = "",
+) -> bool:
+    """Atomically mark a WhatsApp inbound message as processed.
+
+    Returns False when the same provider message id was already handled.
+    """
+    if not message_id:
+        return True
+
+    try:
+        now = datetime.utcnow()
+        key = f"{phone}:{message_id}"
+        result = whatsapp_processed_messages_collection.update_one(
+            {"_id": key},
+            {
+                "$setOnInsert": {
+                    "_id": key,
+                    "message_id": message_id,
+                    "phone": phone,
+                    "message_text": message_text,
+                    "created_at": now,
+                }
+            },
+            upsert=True,
+        )
+        return bool(result.upserted_id)
+    except Exception as e:
+        logger.error(
+            "Error marking WhatsApp message as processed",
+            extra={"error": e, "message_id": message_id, "phone": phone},
+        )
+        return True
+
+
+def mark_handoff_attended(session_id: str):
+    """Mark queue handoff requests as attended when an agent opens/takes over."""
+    try:
+        now = int(time.time())
+        handoff_requests_collection.update_many(
+            {"session_id": session_id, "status": "waiting"},
+            {"$set": {"status": "attended", "attended_at": now, "updated_at": now}},
+        )
+    except Exception as e:
+        logger.error("Error marking handoff attended", extra={"error": e})
 
 def list_all_alerts():
     """Util function to return all alerts."""
@@ -410,12 +495,16 @@ def list_all_alerts():
 def delete_alert_by_id(id: str):
     """Util function to delete alert by id."""
     try:
+        alert = agent_alerts.find_one({"_id": ObjectId(id)})
         result = agent_alerts.delete_one(
             {"_id": ObjectId(id)}
         )
 
         if result.deleted_count == 0:
             return False
+
+        if alert and alert.get("session_id"):
+            mark_handoff_attended(alert.get("session_id"))
 
         return True
     except Exception as e:
