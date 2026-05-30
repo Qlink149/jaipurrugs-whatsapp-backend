@@ -19,6 +19,11 @@ from qlink_chatbot.database.mongo_utils import (
     toggle_ai,
     whatsapp_sessions_collection,
 )
+from qlink_chatbot.utils.agent_availability import (
+    OFFLINE_MESSAGE,
+    get_agent_status,
+    set_agent_manual_status,
+)
 from qlink_chatbot.utils.jr_api_client import get_all_products as _jr_get_all_products
 from qlink_chatbot.utils.env_load import qlink_gupshup_source
 from qlink_chatbot.utils.jaipur_rugs_api import products_collection as website_products_collection
@@ -29,7 +34,7 @@ dashboard_router = APIRouter(prefix="/api")
 manual_products_collection = whatsapp_sessions_collection.database["dashboard_products"]
 catalog_designs_collection = whatsapp_sessions_collection.database["catalog_designs"]
 AGENT_TAKEOVER_MESSAGE = (
-    "Thank you. Our rug specialist will assist you further over a call/message."
+    "Our rug specialist will connect soon as per availability. We request your patience."
 )
 INSIGHT_COLORS = [
     "red",
@@ -331,6 +336,19 @@ def send_whatsapp_message(payload: dict = Body(...)):
     return {"success": True}
 
 
+@dashboard_router.get("/agent-status")
+def read_agent_status():
+    return get_agent_status()
+
+
+@dashboard_router.post("/agent-status")
+def update_agent_status(payload: dict = Body(...)):
+    try:
+        return set_agent_manual_status((payload.get("manual_status") or "").strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @dashboard_router.post("/conversations/{phone}/takeover")
 def takeover_conversation(phone: str):
     """Switch a WhatsApp conversation to human-agent mode and notify the customer."""
@@ -343,6 +361,8 @@ def takeover_conversation(phone: str):
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     now = datetime.utcnow()
+    status = get_agent_status()
+    message = AGENT_TAKEOVER_MESSAGE if status["is_accepting_chats"] else OFFLINE_MESSAGE
     whatsapp_sessions_collection.update_one(
         {"session_id": normalized_phone},
         {
@@ -350,7 +370,7 @@ def takeover_conversation(phone: str):
             "$push": {
                 "chat_history": {
                     "role": "agent",
-                    "content": AGENT_TAKEOVER_MESSAGE,
+                    "content": message,
                     "timestamp": now,
                 }
             },
@@ -358,9 +378,9 @@ def takeover_conversation(phone: str):
     )
     dispatch_whatsapp_responses(
         phone_number=normalized_phone,
-        bot_responses=[{"type": "text", "text": AGENT_TAKEOVER_MESSAGE}],
+        bot_responses=[{"type": "text", "text": message}],
     )
-    return {"phone": normalized_phone, "is_ai": False, "message": AGENT_TAKEOVER_MESSAGE}
+    return {"phone": normalized_phone, "is_ai": False, "message": message}
 
 
 @dashboard_router.get("/prompt")

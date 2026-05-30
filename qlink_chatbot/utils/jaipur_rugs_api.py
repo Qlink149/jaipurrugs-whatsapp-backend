@@ -485,6 +485,23 @@ async def _resolve_currency_from_ip(ip: str) -> str:
     return DEFAULT_CURRENCY
 
 
+def _resolve_currency_from_country_code(country_code: str) -> str:
+    digits = re.sub(r"\D", "", country_code or "")
+    for length in range(min(3, len(digits)), 0, -1):
+        currency = CALLING_CODE_TO_CURRENCY.get(digits[:length])
+        if currency:
+            return currency
+    return ""
+
+
+def _first_valid_image(raw: dict) -> str:
+    for key in ("HeadShot", "Corner", "CloseUp", "Floorshot"):
+        value = (raw.get(key) or "").strip()
+        if value and not value.endswith("/"):
+            return value
+    return ""
+
+
 async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_code: str = ""):  # country_code kept for caller compatibility
     """Search products from MongoDB with progressive field fallback."""
     try:
@@ -584,7 +601,9 @@ async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_
         if weight_filter is not None:
             results = _apply_weight_filter(results, weight_filter)
 
-        currency = await _resolve_currency_from_ip(client_ip)
+        currency = _resolve_currency_from_country_code(country_code)
+        if not currency:
+            currency = await _resolve_currency_from_ip(client_ip)
         currency_field = CURRENCY_FIELDS.get(currency, "INR_MRP")
 
         if color_sku_scores:
@@ -643,7 +662,7 @@ async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_
                 "quality": search.get("quality", ""),
                 "room": search.get("room", []),
                 "weight": search.get("weight", 0.0),
-                "image": raw.get("HeadShot", ""),
+                "image": _first_valid_image(raw),
                 "mrp": {
                     "INR": raw.get("INR_MRP"),
                     "USD": raw.get("USD_MRP"),

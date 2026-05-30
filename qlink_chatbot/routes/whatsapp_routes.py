@@ -58,6 +58,7 @@ def _extract_search_cta(text: str) -> tuple[str, str | None, str | None]:
     for match in _MD_LINK_RE.finditer(text):
         label, url = match.group(1), match.group(2)
         if "search" in label.lower() or "browse" in label.lower() or "/search" in url:
+            url = "https://www.jaipurrugs.com/in/search"
             cleaned = _MD_LINK_RE.sub("", text, count=1).strip()
             cleaned = re.sub(r'(?m)^\s*[-·•]\s*$', '', cleaned)
             cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()

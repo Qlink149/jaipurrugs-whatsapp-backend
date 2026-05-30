@@ -14,6 +14,7 @@ from qlink_chatbot.database.mongo_utils import (
     user_name,
 )
 from qlink_chatbot.database.pinecone_utils import fetch_similar_sessions
+from qlink_chatbot.utils.agent_availability import get_agent_status
 from qlink_chatbot.utils.jaipur_rugs_api import jaipur_rugs_product_search
 from qlink_chatbot.utils.logger_config import logger
 
@@ -181,10 +182,12 @@ async def chat_agent(
         _IST = timezone(timedelta(hours=5, minutes=30))
         _now_ist = datetime.now(_IST)
         _ist_time_str = _now_ist.strftime("%A, %I:%M %p IST")
+        agent_status = get_agent_status()
 
         input_list = [
             {"role": "developer", "content": f"Chat history:\n{format_recent_chat_for_ai(chat_history)}"},
             {"role": "developer", "content": f"Current date and time: {_ist_time_str}"},
+            {"role": "developer", "content": f"Agent live status: {agent_status['label']}. Business hours: {agent_status['business_hours']}. If Offline, use this message for handoff requests: {agent_status['offline_message']}"},
             {"role": "developer", "content": f"users country code: {country_code}"},
             {"role": "developer", "content": f"User's detected local currency: {detected_currency or 'INR'}. Show product prices in this currency by default unless the user explicitly asks for a different one."},
             {
