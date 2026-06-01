@@ -217,6 +217,26 @@ def _normalize_currency_code(value: str) -> str:
     return CURRENCY_ALIASES.get(normalized, normalized.upper())
 
 
+def _format_price_amount(value) -> str:
+    if value is None or value == "":
+        return ""
+    try:
+        amount = float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return str(value).strip()
+
+    if amount.is_integer():
+        return f"{int(amount):,}"
+    return f"{amount:,.2f}".rstrip("0").rstrip(".")
+
+
+def _build_display_price(currency: str, amount) -> str:
+    formatted_amount = _format_price_amount(amount)
+    if not formatted_amount:
+        return ""
+    return f"{currency} {formatted_amount}"
+
+
 def _currency_alias_pattern() -> str:
     return "|".join(
         re.escape(alias)
@@ -894,9 +914,14 @@ async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_
                 color_score.get("colors", {}),
                 colors,
             )
+            price_amount = raw.get(currency_field)
+            display_price = _build_display_price(currency, price_amount)
             formatted.append({
                 "url": f"https://www.jaipurrugs.com/in/rugs/{raw.get('ProductURL')}?barcode={p.get('BarCode')}",
-                "price": {"currency": currency, "amount": raw.get(currency_field)},
+                "price": {"currency": currency, "amount": price_amount},
+                "display_currency": currency,
+                "display_price": display_price,
+                "price_source_field": currency_field,
                 "name": raw.get("Name", ""),
                 "SKU": sku,
                 "collection": raw.get("Collection", ""),
