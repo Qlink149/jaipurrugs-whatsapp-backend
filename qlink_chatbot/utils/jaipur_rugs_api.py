@@ -40,6 +40,26 @@ CURRENCY_FIELDS = {
     "SGD": "SGD_MRP", "AED": "AED_MRP",
 }
 
+CURRENCY_ALIASES = {
+    "inr": "INR",
+    "rs": "INR",
+    "rupee": "INR",
+    "rupees": "INR",
+    "usd": "USD",
+    "dollar": "USD",
+    "dollars": "USD",
+    "eur": "EUR",
+    "euro": "EUR",
+    "euros": "EUR",
+    "gbp": "GBP",
+    "pound": "GBP",
+    "pounds": "GBP",
+    "aud": "AUD",
+    "chf": "CHF",
+    "sgd": "SGD",
+    "aed": "AED",
+}
+
 PRICE_OPERATOR_WORDS = {
     "above": "$gte",
     "over": "$gte",
@@ -61,6 +81,14 @@ PRICE_OPERATOR_WORDS = {
     "upto": "$lte",
     "within": "$lte",
     "budget": "$lte",
+    "for": "$lte",
+}
+
+PRICE_CONTEXT_WORDS = {
+    "price", "priced", "cost", "costing", "amount", "budget", "range",
+    "mrp", "rs", "rupee", "rupees", "inr", "usd", "eur", "gbp", "aud",
+    "chf", "sgd", "aed", "dollar", "dollars", "euro", "euros", "pound",
+    "pounds",
 }
 
 AMOUNT_MULTIPLIERS = {
@@ -84,6 +112,8 @@ GENERIC_NOISE_WORDS = {
     "please", "rug", "rugs", "carpet", "carpets", "price", "priced",
     "cost", "costing", "range", "amount", "any", "some", "options",
     "option", "products", "product",
+    "inr", "usd", "eur", "gbp", "aud", "chf", "sgd", "aed",
+    "dollar", "dollars", "euro", "euros", "pound", "pounds",
 }
 
 MATERIAL_QUALIFIER_WORDS = {
@@ -135,7 +165,7 @@ def _extract_colors_from_text(text: str) -> tuple[list[str], str]:
 
     # Match longer color words first (e.g. multicolor before multi).
     for color in sorted(COMMON_COLORS, key=len, reverse=True):
-        pattern = rf"\\b{re.escape(color)}\\b"
+        pattern = rf"\b{re.escape(color)}\b"
         if re.search(pattern, residual):
             extracted.append(color)
             residual = re.sub(pattern, " ", residual)
@@ -174,7 +204,46 @@ def _parse_amount_with_suffix(amount_text: str, suffix: str = "") -> float:
     return amount * multiplier
 
 
+def _is_probable_price_amount(amount: float, suffix: str = "", context: str = "") -> bool:
+    if suffix:
+        return True
+    if amount >= 1000:
+        return True
+    return any(word in context.split() for word in PRICE_CONTEXT_WORDS)
+
+
+def _normalize_currency_code(value: str) -> str:
+    normalized = (value or DEFAULT_CURRENCY).lower().strip()
+    return CURRENCY_ALIASES.get(normalized, normalized.upper())
+
+
+def _currency_alias_pattern() -> str:
+    return "|".join(
+        re.escape(alias)
+        for alias in sorted(CURRENCY_ALIASES, key=len, reverse=True)
+    )
+
+
+def _extract_requested_currency_from_text(text: str) -> str:
+    lower = (text or "").lower()
+    alias_pattern = _currency_alias_pattern()
+    patterns = [
+        rf"\bin\s*({alias_pattern})\b",
+        rf"\bin({alias_pattern})\b",
+        rf"\b({alias_pattern})\s*(?:price|prices|pricing|mrp)\b",
+        rf"\b(?:price|prices|pricing|mrp)\s*(?:in\s*)?({alias_pattern})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, lower)
+        if match:
+            currency = _normalize_currency_code(match.group(1))
+            if currency in CURRENCY_FIELDS:
+                return currency
+    return ""
+
+
 def _clean_generic_residual(text: str) -> str:
+    text = re.sub(rf"\bin(?:{_currency_alias_pattern()})\b", " ", text)
     text = re.sub(r"\b(?:and|or|with|in|of|for|the|a|an)\b", " ", text)
     words = [word for word in text.split() if word not in GENERIC_NOISE_WORDS]
     return re.sub(r"\s+", " ", " ".join(words)).strip()
@@ -183,19 +252,45 @@ def _clean_generic_residual(text: str) -> str:
 def _extract_price_filter_from_text(text: str) -> tuple[dict | None, str]:
     """Extract one price filter from free text, supporting Indian shorthand."""
     currencies = r"inr|usd|eur|gbp|aud|chf|sgd|aed"
+    currency_aliases = _currency_alias_pattern()
     operators = "|".join(
         re.escape(word)
         for word in sorted(PRICE_OPERATOR_WORDS, key=len, reverse=True)
     )
     amount = r"([\d,]+(?:\.\d+)?)\s*(k|thousand|lacs?|lakhs?|lakh|lc|l|cr|crores?|m|million)?"
 
+    range_match = re.search(
+        rf"\bbetween\s+(?:({currency_aliases})\s*)?{amount}\s+"
+        rf"(?:and|to|-)\s+(?:({currency_aliases})\s*)?{amount}",
+        text,
+    )
+    if range_match:
+        first_currency, min_amount_text, min_suffix, second_currency, max_amount_text, max_suffix = (
+            range_match.groups()
+        )
+        min_amount = _parse_amount_with_suffix(min_amount_text, min_suffix or "")
+        max_amount = _parse_amount_with_suffix(max_amount_text, max_suffix or min_suffix or "")
+        currency = first_currency or second_currency or DEFAULT_CURRENCY
+        price_filter = {
+            "currency": _normalize_currency_code(currency),
+            "min_amount": min(min_amount, max_amount),
+            "max_amount": max(min_amount, max_amount),
+        }
+        residual = f"{text[:range_match.start()]} {text[range_match.end():]}"
+        return price_filter, _clean_generic_residual(residual)
+
     patterns = [
+        # "under 1000 usd", "below 500 dollars"
+        rf"\b({operators})\b\s*{amount}\s*({currency_aliases})\b",
         # "above INR 4 lakh", "under usd 1000", "budget 80000"
-        rf"\b({operators})\b\s*(?:({currencies})\s*)?{amount}",
+        rf"\b({operators})\b\s*(?:({currency_aliases})\s*)?{amount}",
         # "INR 4 lakh above", "usd 1000 under"
-        rf"\b(?:({currencies})\s*)?{amount}\s*\b({operators})\b",
-        # Existing compact form: "INR 80000" or bare "400000".
-        rf"\b({currencies})\s+{amount}\b",
+        rf"\b(?:({currency_aliases})\s*)?{amount}\s*\b({operators})\b",
+        # Existing compact form: "INR 80000", "rs 50000", "50000 rupees".
+        rf"\b({currency_aliases})\s+{amount}\b",
+        rf"\b{amount}\s*({currency_aliases})\b",
+        # Plain amount with context or a large enough value: "show rugs 100000", "4 lakh".
+        rf"\b{amount}\b",
     ]
 
     for index, pattern in enumerate(patterns):
@@ -205,16 +300,33 @@ def _extract_price_filter_from_text(text: str) -> tuple[dict | None, str]:
 
         groups = match.groups()
         if index == 0:
-            operator_word, currency, amount_text, suffix = groups
+            operator_word, amount_text, suffix, currency = groups
         elif index == 1:
+            operator_word, currency, amount_text, suffix = groups
+        elif index == 2:
             currency, amount_text, suffix, operator_word = groups
-        else:
+        elif index == 3:
             currency, amount_text, suffix = groups
             operator_word = "budget"
+        elif index == 4:
+            amount_text, suffix, currency = groups
+            operator_word = "budget"
+        else:
+            amount_text, suffix = groups
+            currency = DEFAULT_CURRENCY
+            operator_word = "budget"
+
+        parsed_amount = _parse_amount_with_suffix(amount_text, suffix or "")
+        if not currency and not _is_probable_price_amount(
+            parsed_amount,
+            suffix or "",
+            f"{text[:match.start()]} {text[match.end():]}",
+        ):
+            continue
 
         price_filter = {
-            "currency": (currency or DEFAULT_CURRENCY).upper(),
-            "amount": _parse_amount_with_suffix(amount_text, suffix or ""),
+            "currency": _normalize_currency_code(currency or DEFAULT_CURRENCY),
+            "amount": parsed_amount,
             "operator": PRICE_OPERATOR_WORDS.get(operator_word, "$lte"),
         }
         residual = f"{text[:match.start()]} {text[match.end():]}"
@@ -547,9 +659,14 @@ def _build_mongo_query(
         query["search.style"] = {"$regex": regex, "$options": "i"}
 
     if price_filter:
-        operator = price_filter.get("operator") or "$lte"
-        amount = price_filter["amount"]
-        comparison = {"$gt": 0, operator: amount}
+        comparison = {"$gt": 0}
+        if "min_amount" in price_filter:
+            comparison["$gte"] = price_filter["min_amount"]
+        if "max_amount" in price_filter:
+            comparison["$lte"] = price_filter["max_amount"]
+        if "amount" in price_filter:
+            operator = price_filter.get("operator") or "$lte"
+            comparison[operator] = price_filter["amount"]
         if price_filter["currency"] == "INR":
             query["search.price"] = comparison
         else:
@@ -642,6 +759,7 @@ def _first_valid_image(raw: dict) -> str:
 async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_code: str = ""):  # country_code kept for caller compatibility
     """Search products from MongoDB with progressive field fallback."""
     try:
+        requested_currency = _extract_requested_currency_from_text(keyword)
         colors, materials, constructions, styles, sizes, price_filter, weight_filter, generics = _parse_keyword_filters(keyword)
         logger.info(f"Parsed filters — colors: {colors}, materials: {materials}, sizes: {sizes}, weight: {weight_filter}, price: {price_filter}")
 
@@ -738,7 +856,9 @@ async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_
         if weight_filter is not None:
             results = _apply_weight_filter(results, weight_filter)
 
-        currency = _resolve_currency_from_country_code(country_code)
+        currency = requested_currency or (price_filter or {}).get("currency") or ""
+        if not currency:
+            currency = _resolve_currency_from_country_code(country_code)
         if not currency:
             currency = await _resolve_currency_from_ip(client_ip)
         currency_field = CURRENCY_FIELDS.get(currency, "INR_MRP")
