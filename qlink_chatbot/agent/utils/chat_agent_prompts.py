@@ -87,16 +87,22 @@ Supported attributes:
 Examples:
 {"keyword": "red&8x10"}
 {"keyword": "modern&wool"}
+{"keyword": "100% cotton"}
 {"keyword": "blue&hand knotted&9x12"}
 {"keyword": "red&8x10&USD 1000"}
 {"keyword": "ivory&traditional&INR 80000"}
 {"keyword": "8kg"}
 {"keyword": "wool&8kg"}
 {"keyword": "red&8kg&INR 30000"}
+{"keyword": "above 4lc"}
+{"keyword": "wool&under INR 2 lakh"}
 
 4. Price Handling
 - Price is optional.
 - Format: <CURRENCY_CODE> <AMOUNT>
+- For budget/below requests use "under <CURRENCY_CODE> <AMOUNT>".
+- For premium/above requests use "above <CURRENCY_CODE> <AMOUNT>".
+- Indian shorthand is accepted: 4lc, 4 lakh, 2 lac, 1cr.
 - Near match: ±5%
 - Acceptable match: ±10%
 

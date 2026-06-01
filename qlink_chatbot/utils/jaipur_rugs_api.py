@@ -40,6 +40,57 @@ CURRENCY_FIELDS = {
     "SGD": "SGD_MRP", "AED": "AED_MRP",
 }
 
+PRICE_OPERATOR_WORDS = {
+    "above": "$gte",
+    "over": "$gte",
+    "more than": "$gte",
+    "greater than": "$gte",
+    "higher than": "$gte",
+    "minimum": "$gte",
+    "min": "$gte",
+    "from": "$gte",
+    "starting from": "$gte",
+    "at least": "$gte",
+    "below": "$lte",
+    "under": "$lte",
+    "less than": "$lte",
+    "lower than": "$lte",
+    "maximum": "$lte",
+    "max": "$lte",
+    "up to": "$lte",
+    "upto": "$lte",
+    "within": "$lte",
+    "budget": "$lte",
+}
+
+AMOUNT_MULTIPLIERS = {
+    "k": 1_000,
+    "thousand": 1_000,
+    "l": 100_000,
+    "lac": 100_000,
+    "lacs": 100_000,
+    "lakh": 100_000,
+    "lakhs": 100_000,
+    "lc": 100_000,
+    "cr": 10_000_000,
+    "crore": 10_000_000,
+    "crores": 10_000_000,
+    "m": 1_000_000,
+    "million": 1_000_000,
+}
+
+GENERIC_NOISE_WORDS = {
+    "show", "me", "find", "search", "looking", "look", "need", "want",
+    "please", "rug", "rugs", "carpet", "carpets", "price", "priced",
+    "cost", "costing", "range", "amount", "any", "some", "options",
+    "option", "products", "product",
+}
+
+MATERIAL_QUALIFIER_WORDS = {
+    "pure", "all", "full", "fully", "only", "made", "from", "material",
+    "materials", "fabric", "fabrics",
+}
+
 CALLING_CODE_TO_CURRENCY: dict[str, str] = {
     "91":  "INR",  # India
     "971": "AED",  # UAE
@@ -94,6 +145,82 @@ def _extract_colors_from_text(text: str) -> tuple[list[str], str]:
     residual = re.sub(r"\s+", " ", residual).strip()
 
     return extracted, residual
+
+
+def _extract_materials_from_text(text: str) -> tuple[list[str], str]:
+    """Extract known materials from free text and ignore purity percentages."""
+    extracted: list[str] = []
+    residual = re.sub(r"\b\d+(?:\.\d+)?\s*%", " ", text)
+
+    for material in sorted(KNOWN_MATERIALS, key=len, reverse=True):
+        pattern = rf"\b{re.escape(material)}\b"
+        if re.search(pattern, residual):
+            extracted.append(material)
+            residual = re.sub(pattern, " ", residual)
+
+    residual = re.sub(r"\b(and|or|with|in|of|for|rug|rugs)\b", " ", residual)
+    words = [
+        word for word in residual.split()
+        if word not in MATERIAL_QUALIFIER_WORDS
+    ]
+    residual = re.sub(r"\s+", " ", " ".join(words)).strip()
+
+    return extracted, residual
+
+
+def _parse_amount_with_suffix(amount_text: str, suffix: str = "") -> float:
+    amount = float(amount_text.replace(",", ""))
+    multiplier = AMOUNT_MULTIPLIERS.get((suffix or "").lower(), 1)
+    return amount * multiplier
+
+
+def _clean_generic_residual(text: str) -> str:
+    text = re.sub(r"\b(?:and|or|with|in|of|for|the|a|an)\b", " ", text)
+    words = [word for word in text.split() if word not in GENERIC_NOISE_WORDS]
+    return re.sub(r"\s+", " ", " ".join(words)).strip()
+
+
+def _extract_price_filter_from_text(text: str) -> tuple[dict | None, str]:
+    """Extract one price filter from free text, supporting Indian shorthand."""
+    currencies = r"inr|usd|eur|gbp|aud|chf|sgd|aed"
+    operators = "|".join(
+        re.escape(word)
+        for word in sorted(PRICE_OPERATOR_WORDS, key=len, reverse=True)
+    )
+    amount = r"([\d,]+(?:\.\d+)?)\s*(k|thousand|lacs?|lakhs?|lakh|lc|l|cr|crores?|m|million)?"
+
+    patterns = [
+        # "above INR 4 lakh", "under usd 1000", "budget 80000"
+        rf"\b({operators})\b\s*(?:({currencies})\s*)?{amount}",
+        # "INR 4 lakh above", "usd 1000 under"
+        rf"\b(?:({currencies})\s*)?{amount}\s*\b({operators})\b",
+        # Existing compact form: "INR 80000" or bare "400000".
+        rf"\b({currencies})\s+{amount}\b",
+    ]
+
+    for index, pattern in enumerate(patterns):
+        match = re.search(pattern, text)
+        if not match:
+            continue
+
+        groups = match.groups()
+        if index == 0:
+            operator_word, currency, amount_text, suffix = groups
+        elif index == 1:
+            currency, amount_text, suffix, operator_word = groups
+        else:
+            currency, amount_text, suffix = groups
+            operator_word = "budget"
+
+        price_filter = {
+            "currency": (currency or DEFAULT_CURRENCY).upper(),
+            "amount": _parse_amount_with_suffix(amount_text, suffix or ""),
+            "operator": PRICE_OPERATOR_WORDS.get(operator_word, "$lte"),
+        }
+        residual = f"{text[:match.start()]} {text[match.end():]}"
+        return price_filter, _clean_generic_residual(residual)
+
+    return None, _clean_generic_residual(text)
 
 
 def _normalize_sku(value) -> str:
@@ -324,16 +451,20 @@ def _parse_keyword_filters(keyword: str):
             if not lower:
                 continue
 
-        # Price: "INR 30000"
-        price_match = re.match(
-            r'^(inr|usd|eur|gbp|aud|chf|sgd|aed)\s+([\d,]+(?:\.\d+)?)$', lower
-        )
-        if price_match:
-            price_filter = {
-                "currency": price_match.group(1).upper(),
-                "amount": float(price_match.group(2).replace(",", "")),
-            }
-            continue
+        # Price: "INR 30000", "above 4lc", "under INR 2 lakh".
+        parsed_price_filter, lower = _extract_price_filter_from_text(lower)
+        if parsed_price_filter:
+            price_filter = parsed_price_filter
+            if not lower:
+                continue
+
+        # Material phrases inside free text: "100% cotton rugs", "pure wool rugs".
+        found_materials, residual_text = _extract_materials_from_text(lower)
+        if found_materials:
+            materials.extend(found_materials)
+            lower = residual_text
+            if not lower:
+                continue
 
         # Weight ceiling: "weight 8", "8kg", "weight 8kg"
         weight_match = re.match(r'^(?:weight\s*)?([\d.]+)\s*kg?$', lower)
@@ -367,10 +498,13 @@ def _parse_keyword_filters(keyword: str):
             continue
 
         # Everything else → generic text match
-        generics.append(lower)
+        generic = _clean_generic_residual(lower)
+        if generic:
+            generics.append(generic)
 
     # Deduplicate while preserving order so fallback logic sees accurate color count.
     colors = list(dict.fromkeys(colors))
+    materials = list(dict.fromkeys(materials))
 
     return colors, materials, constructions, styles, sizes, price_filter, weight_filter, generics
 
@@ -413,12 +547,15 @@ def _build_mongo_query(
         query["search.style"] = {"$regex": regex, "$options": "i"}
 
     if price_filter:
+        operator = price_filter.get("operator") or "$lte"
+        amount = price_filter["amount"]
+        comparison = {"$gt": 0, operator: amount}
         if price_filter["currency"] == "INR":
-            query["search.price"] = {"$gt": 0, "$lte": price_filter["amount"]}
+            query["search.price"] = comparison
         else:
             field = CURRENCY_FIELDS.get(price_filter["currency"])
             if field:
-                query[f"raw.{field}"] = {"$gt": 0, "$lte": price_filter["amount"]}
+                query[f"raw.{field}"] = comparison
 
     if sku_filter:
         and_clauses.append(
