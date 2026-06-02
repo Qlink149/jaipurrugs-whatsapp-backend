@@ -51,7 +51,7 @@ async def geo_check(request: Request, ip: str = ""):
     Pass ?ip=1.2.3.4 to test a specific IP, or leave blank to use your own.
     """
     from qlink_chatbot.utils.geo_utils import get_geo
-    target_ip = ip or request.client.host
+    target_ip = ip or _request_ip(request)
     result = await get_geo(target_ip)
     return {"ip": target_ip, **result}
 

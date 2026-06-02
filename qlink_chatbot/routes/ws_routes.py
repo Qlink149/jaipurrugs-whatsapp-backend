@@ -29,6 +29,16 @@ active_connections: dict[str, dict[str, any]] = {}
 admin_connections: set[WebSocket] = set()
 
 
+def _websocket_client_ip(websocket: WebSocket) -> str:
+    forwarded_for = websocket.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    real_ip = websocket.headers.get("x-real-ip", "")
+    if real_ip:
+        return real_ip.strip()
+    return websocket.client.host if websocket.client else ""
+
+
 async def notify_admins():
     """Send active user list to all connected admin dashboards"""
     data = [{"session_id": sid} for sid, conn in active_connections.items() if conn.get("user")]
@@ -46,7 +56,7 @@ async def user_ws(websocket: WebSocket, session_id: str, country_code: str, name
     await websocket.accept()
     logger.info(f"User connected: {session_id} - {name} from {country_code}")
 
-    client_ip = websocket.client.host if websocket.client else ""
+    client_ip = _websocket_client_ip(websocket)
     session = get_session_by_id(session_id=session_id)
     if not session:
         geo = await get_geo(client_ip)
