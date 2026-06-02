@@ -17,6 +17,7 @@ from qlink_chatbot.database.pinecone_utils import fetch_similar_sessions
 from qlink_chatbot.utils.agent_availability import get_agent_status
 from qlink_chatbot.utils.jaipur_rugs_api import jaipur_rugs_product_search
 from qlink_chatbot.utils.logger_config import logger
+from qlink_chatbot.utils.store_locations import search_store_locations
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 client = AsyncOpenAI(api_key=API_KEY) if API_KEY else None
@@ -55,6 +56,10 @@ tools = [
                 "keyword": {
                     "type": "string",
                     "description": "Single or multi-query string joined by '&'. Examples: 'red', '8x10', 'wool', 'hand knotted', 'red&8x10', 'red&8x10&USD 1000'."
+                },
+                "currency": {
+                    "type": "string",
+                    "description": "Optional display/filter currency explicitly requested by the user. Use one of INR, AED, AUD, CHF, EUR, GBP, SGD, USD. Leave empty when user did not request a currency."
                 }
             },
             "required": ["keyword"]
@@ -82,6 +87,21 @@ tools = [
                 "query": {
                     "type": "string",
                     "description": "The search query text representing what the user is looking for."
+                },
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "search_store_locations",
+        "description": "Search verified Jaipur Rugs showroom/store locations, addresses, phone numbers, and emails by city, country, or area. Use for store, showroom, address, direction, location, or timing questions.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "City, country, area, or 'all stores'. Examples: 'Delhi', 'Mumbai', 'Bengaluru', 'all stores'."
                 },
             },
             "required": ["query"]
@@ -196,8 +216,10 @@ async def chat_agent(
             },
             {"role": "developer", "content": "Never produce filler text like 'searching...' or 'one moment please'. If a tool is needed, directly call the tool without any extra wording."},
             {"role": "developer", "content": "When responding: do not add any narrative, status updates, waiting messages, politeness fillers, or redundant sentences. Either answer directly or call a tool directly."},
+            {"role": "developer", "content": "In greeting or welcome-style replies, ask the customer what rug size they are looking for. For follow-up size questions after products were shown, answer from Latest shown products context when possible. If the user mentions size but does not identify the product, ask which product they mean and what size they prefer."},
+            {"role": "developer", "content": "For store, showroom, address, direction, location, or timing questions, call `search_store_locations` before `search_kb`. Use only returned store data. If timing is blank, say timing is not available in the verified store data and offer to connect an agent."},
             {"role": "developer", "content": "When `jaipur_rugs_product_search` returns multiple products, include all returned products (up to 3) in the final user-visible response. Do not show only one unless only one was returned."},
-            {"role": "developer", "content": "For product search results, show the exact `display_price` returned by `jaipur_rugs_product_search`; do not recalculate, convert, or pick another MRP value. If the user asks price/size/material/weight/link for a previously shown rug, answer from Latest shown products context. For follow-up currency requests, use exact values from `mrp` for INR, AED, AUD, CHF, EUR, GBP, SGD, USD. Do not convert between currencies, do not estimate, and do not use exchange rates. If requested currency value is missing, clearly say it is unavailable."},
+            {"role": "developer", "content": "For product search results, show the exact `display_price` returned by `jaipur_rugs_product_search`; do not recalculate, convert, or pick another MRP value. If the user asks price/size/material/weight/link for a previously shown rug, answer from Latest shown products context. For follow-up currency requests, use exact values from `mrp` only if `display_price` for that currency is not available. Do not convert between currencies yourself, do not estimate, and do not use exchange rates. If requested currency value is missing, clearly say it is unavailable."},
             {"role": "developer", "content": "Only when the response contains actual rug results returned by the `jaipur_rugs_product_search` tool, append this exact line at the very end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'. Do NOT add it for cleaning, care, order, careers, custom rug, or any non-product response."},
             {"role": "user", "content": user_message}
         ]
@@ -228,7 +250,12 @@ async def chat_agent(
                 output = ""
                 if item.name == "jaipur_rugs_product_search":
                     keyword = args.get("keyword")
-                    products = await jaipur_rugs_product_search(keyword, client_ip=client_ip, country_code=country_code)
+                    products = await jaipur_rugs_product_search(
+                        keyword,
+                        client_ip=client_ip,
+                        country_code=country_code,
+                        requested_currency=args.get("currency", ""),
+                    )
                     save_previous_search(
                         session_id,
                         keyword,
@@ -257,6 +284,10 @@ async def chat_agent(
                     query = args.get("query")
                     kb_search_response = await fetch_similar_sessions(query=query, top_k=5)
                     output = json.dumps(kb_search_response)
+
+                elif item.name == "search_store_locations":
+                    query = args.get("query")
+                    output = json.dumps(search_store_locations(query=query))
 
                 elif item.name == "raise_agent_alert":
                     alert = args.get("alert")

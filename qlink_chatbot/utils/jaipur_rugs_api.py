@@ -776,10 +776,19 @@ def _first_valid_image(raw: dict) -> str:
     return ""
 
 
-async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_code: str = ""):  # country_code kept for caller compatibility
+async def jaipur_rugs_product_search(
+    keyword: str,
+    client_ip: str = "",
+    country_code: str = "",
+    requested_currency: str = "",
+):
     """Search products from MongoDB with progressive field fallback."""
     try:
-        requested_currency = _extract_requested_currency_from_text(keyword)
+        requested_currency = (
+            _normalize_currency_code(requested_currency)
+            if requested_currency
+            else _extract_requested_currency_from_text(keyword)
+        )
         colors, materials, constructions, styles, sizes, price_filter, weight_filter, generics = _parse_keyword_filters(keyword)
         logger.info(f"Parsed filters — colors: {colors}, materials: {materials}, sizes: {sizes}, weight: {weight_filter}, price: {price_filter}")
 
