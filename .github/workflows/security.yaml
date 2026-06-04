@@ -13,7 +13,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Verify Dockerfile Exists
         run: |
@@ -59,14 +59,14 @@ jobs:
       - name: Run Semgrep
         id: semgrep
         continue-on-error: true
-        uses: returntocorp/semgrep-action@v1
+        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
         with:
           config: p/security-audit
 
       - name: Run Gitleaks
         id: gitleaks
         continue-on-error: true
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -115,17 +115,17 @@ jobs:
       - name: Run Checkov
         id: checkov
         continue-on-error: true
-        uses: bridgecrewio/checkov-action@master
+        uses: bridgecrewio/checkov-action@dfb51aed1b783289b0d3f255028e7a88d5e8caa1 # master
         with:
           directory: .
           output_format: cli,json
           output_file_path: console,checkov-report.json
-          skip_check: CKV_K8S_43,CKV_K8S_35,CKV_GHA_7
+          skip_check: CKV_K8S_43,CKV_K8S_35
 
       - name: Generate SBOM
         id: sbom
         continue-on-error: true
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           path: .
           output-file: sbom.spdx.json
@@ -158,7 +158,6 @@ jobs:
             "- Check: " + (.check_name // "") + "\n\n"
             ' checkov-report.json >> $GITHUB_STEP_SUMMARY
           fi
-
 
           summarize_file () {
             FILE=$1
@@ -193,32 +192,31 @@ jobs:
 
       - name: Upload Trivy Filesystem Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: trivy-filesystem-report
           path: trivy-fs.json
 
       - name: Upload Trivy Image Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: trivy-image-report
           path: trivy-image.json
 
       - name: Upload SBOM
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sbom-report
           path: sbom.spdx.json
 
       - name: Upload Checkov Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: checkov-report
           path: checkov-report.json
-
 
       - name: Security Gate
         if: always()

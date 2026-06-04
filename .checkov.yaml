@@ -1,4 +1,3 @@
 skip-checks:
   - CKV_K8S_43  # Image digest pinning: tag set dynamically by CI/CD
   - CKV_K8S_35  # Secrets injected via env vars from Kubernetes/GitHub secrets at deploy time
-  - CKV_GHA_7   # GitHub Actions pinned by version tag, not SHA — intentional for maintainability
