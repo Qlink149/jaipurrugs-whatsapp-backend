@@ -5,6 +5,7 @@ import httpx
 
 from qlink_chatbot.database.mongo_utils import db
 from qlink_chatbot.utils.logger_config import logger
+from qlink_chatbot.utils.jr_api_client import search_products as _jr_search_products
 
 products_collection = db["products"]
 product_color_collection = db["product_color"]
@@ -32,6 +33,10 @@ KNOWN_STYLES = {
     "modern", "traditional", "contemporary", "bohemian", "abstract",
     "geometric", "floral", "tribal", "oriental", "transitional", "antique",
     "vintage", "rustic", "minimalist",
+}
+
+KNOWN_SHAPES = {
+    "round", "oval", "square", "runner", "rectangular", "hexagonal", "octagonal",
 }
 
 CURRENCY_FIELDS = {
@@ -298,7 +303,7 @@ def _highest_matched_color(color_map: dict, requested_colors: list[str]) -> tupl
 def _parse_keyword_filters(keyword: str):
     """
     Parse a &-separated keyword string into structured filters.
-    Returns: colors, materials, constructions, styles, sizes, price_filter, weight_filter, generics
+    Returns: colors, materials, constructions, styles, sizes, shapes, price_filter, weight_filter, generics
     """
     parts = [p.strip() for p in keyword.split("&")]
     colors = []
@@ -306,6 +311,7 @@ def _parse_keyword_filters(keyword: str):
     constructions = []
     styles = []
     sizes = []
+    shapes = []
     price_filter = None
     weight_filter = None
     generics = []
@@ -316,7 +322,6 @@ def _parse_keyword_filters(keyword: str):
             continue
 
         # Color phrases inside free text: "red rugs", "red and blue rugs".
-        # Keep any remaining text as generic so other filters still work.
         found_colors, residual_text = _extract_colors_from_text(lower)
         if found_colors:
             colors.extend(found_colors)
@@ -351,6 +356,11 @@ def _parse_keyword_filters(keyword: str):
             colors.append(lower)
             continue
 
+        # Shape (before generics — "round", "oval", "runner", etc.)
+        if lower in KNOWN_SHAPES:
+            shapes.append(lower)
+            continue
+
         # Construction (check before style since "hand knotted" is multi-word)
         if any(c in lower for c in KNOWN_CONSTRUCTIONS):
             constructions.append(lower)
@@ -366,13 +376,20 @@ def _parse_keyword_filters(keyword: str):
             styles.append(lower)
             continue
 
-        # Everything else → generic text match
-        generics.append(lower)
+        # Check if any shape word appears inside a longer phrase (e.g. "8 ft round")
+        for shape in KNOWN_SHAPES:
+            if re.search(rf'\b{re.escape(shape)}\b', lower):
+                shapes.append(shape)
+                lower = re.sub(rf'\b{re.escape(shape)}\b', '', lower).strip()
+                break
 
-    # Deduplicate while preserving order so fallback logic sees accurate color count.
+        if lower:
+            generics.append(lower)
+
     colors = list(dict.fromkeys(colors))
+    shapes = list(dict.fromkeys(shapes))
 
-    return colors, materials, constructions, styles, sizes, price_filter, weight_filter, generics
+    return colors, materials, constructions, styles, sizes, shapes, price_filter, weight_filter, generics
 
 
 def _build_mongo_query(
@@ -387,6 +404,7 @@ def _build_mongo_query(
     price_filter: dict | None,
     generics: list,
     sku_filter: list[str] | None = None,
+    shapes: list | None = None,
 ) -> dict:
     """Build a MongoDB filter dict from the given field choices and filter values."""
     query: dict = {"flags.inStock": True}
@@ -411,6 +429,10 @@ def _build_mongo_query(
     if styles:
         regex = "|".join(re.escape(s) for s in styles)
         query["search.style"] = {"$regex": regex, "$options": "i"}
+
+    if shapes:
+        regex = "|".join(re.escape(s) for s in shapes)
+        query["search.shape"] = {"$regex": regex, "$options": "i"}
 
     if price_filter:
         if price_filter["currency"] == "INR":
@@ -485,29 +507,105 @@ async def _resolve_currency_from_ip(ip: str) -> str:
     return DEFAULT_CURRENCY
 
 
-async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_code: str = "", currency: str = ""):  # country_code kept for caller compatibility
-    """Search products from MongoDB with progressive field fallback."""
-    try:
-        colors, materials, constructions, styles, sizes, price_filter, weight_filter, generics = _parse_keyword_filters(keyword)
-        logger.info(f"Parsed filters — colors: {colors}, materials: {materials}, sizes: {sizes}, weight: {weight_filter}, price: {price_filter}")
+def _format_products(selected: list, currency: str, currency_field: str, colors: list, color_sku_scores: dict) -> list:
+    """Format a list of product documents (MongoDB or JR API raw) into the response shape."""
+    formatted = []
+    for p in selected:
+        raw = p.get("raw", p)  # JR API returns flat dicts; MongoDB wraps in raw
+        search = p.get("search", {})
+        color = search.get("color", {})
+        material = search.get("material", {})
+        size = search.get("size", {})
+        sku = _extract_product_sku(p) or _normalize_sku(raw.get("SKU")) or _normalize_sku(raw.get("BarCode"))
+        color_score = color_sku_scores.get(sku, {})
+        highest_color, highest_percentage = _highest_matched_color(
+            color_score.get("colors", {}), colors,
+        )
+        product_slug = raw.get("ProductURL") or ""
+        barcode = p.get("BarCode") or raw.get("BarCode") or ""
+        formatted.append({
+            "url": (
+                f"https://www.jaipurrugs.com/in/rugs/{product_slug}?barcode={barcode}"
+                if product_slug else ""
+            ),
+            "price": {"currency": currency, "amount": raw.get(currency_field)},
+            "name": raw.get("Name", ""),
+            "SKU": sku,
+            "collection": raw.get("Collection", ""),
+            "size": size.get("exact", raw.get("SizeInFT", "")),
+            "shape": search.get("shape", raw.get("Shape", "")),
+            "color": color.get("single", raw.get("GrColor", "")),
+            "color_family": color.get("multi", raw.get("ColorFamily", "")),
+            "matched_color_percentage": {
+                "total": color_score.get("total_percentage", 0),
+                "by_color": color_score.get("colors", {}),
+                "highest": {"color": highest_color, "percentage": highest_percentage},
+            },
+            "style": search.get("style", raw.get("Style", "")),
+            "construction": search.get("construction", raw.get("Construction", "")),
+            "material": material.get("primary", raw.get("Material", "")),
+            "fabric": material.get("details", raw.get("MaterialDetails", "")),
+            "quality": search.get("quality", raw.get("Quality", "")),
+            "room": search.get("room", [r.strip() for r in (raw.get("Room") or "").split(",") if r.strip()]),
+            "weight": search.get("weight", raw.get("Weight", 0.0)),
+            "image": raw.get("HeadShot", ""),
+            "mrp": {
+                "INR": raw.get("INR_MRP"),
+                "USD": raw.get("USD_MRP"),
+                "EUR": raw.get("EUR_MRP"),
+                "GBP": raw.get("GBP_MRP"),
+                "AUD": raw.get("AUD_MRP"),
+                "CHF": raw.get("CHF_MRP"),
+                "SGD": raw.get("SGD_MRP"),
+                "AED": raw.get("AED_MRP"),
+            },
+        })
+    return formatted
 
+
+async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_code: str = "", currency: str = ""):  # country_code kept for caller compatibility
+    """Search products: JR API first, MongoDB fallback."""
+    try:
+        colors, materials, constructions, styles, sizes, shapes, price_filter, weight_filter, generics = _parse_keyword_filters(keyword)
+        logger.info(f"Parsed filters — colors: {colors}, shapes: {shapes}, materials: {materials}, sizes: {sizes}, constructions: {constructions}, weight: {weight_filter}, price: {price_filter}")
+
+        # --- Currency resolution ---
+        if currency and currency in CURRENCY_FIELDS:
+            pass
+        else:
+            currency = await _resolve_currency_from_ip(client_ip)
+        currency_field = CURRENCY_FIELDS.get(currency, "INR_MRP")
+
+        # ── 1. Try JR API first ──────────────────────────────────────────────
+        try:
+            jr_results = await _jr_search_products(keyword)
+            if jr_results:
+                logger.info(f"JR API returned {len(jr_results)} results for keyword: {keyword}")
+                color_sku_scores: dict = {}
+                if colors:
+                    _, color_sku_scores = _resolve_color_sku_scores(colors)
+                unique = _dedupe_products_by_sku([{"raw": p} for p in jr_results])
+                selected = unique[:3]
+                formatted = _format_products(selected, currency, currency_field, colors, color_sku_scores)
+                logger.info(f"Returning {len(formatted)} products from JR API for keyword: {keyword}")
+                return formatted
+        except Exception as jr_err:
+            logger.warning(f"JR API search failed ({jr_err}), falling back to MongoDB")
+
+        # ── 2. MongoDB fallback ──────────────────────────────────────────────
         color_sku_filter: list[str] = []
         color_sku_scores: dict = {}
         query_colors = colors[:]
 
-        # If user asked for colors, first resolve matching SKUs from product_color.
         if colors:
             logger.info(f"Attempting product_color lookup for colors={colors}")
             color_sku_filter, color_sku_scores = _resolve_color_sku_scores(colors)
             if color_sku_filter:
                 logger.info(f"Found {len(color_sku_filter)} color-matched SKUs from product_color")
-                # Color filtering is now handled by SKU shortlist from product_color.
                 query_colors = []
             else:
                 logger.info(f"No SKU matched in product_color for colors={colors}")
 
-        # Field fallback sequences per filter type
-        # Color: single color → try single field first, then multi; multiple colors → multi only
         if len(query_colors) == 1:
             color_fields = ["search.color.single", "search.color.multi", None]
         elif len(query_colors) > 1:
@@ -515,10 +613,7 @@ async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_
         else:
             color_fields = [None]
 
-        # Size: exact match → group match
         size_fields = ["search.size.exact", "search.size.group", None] if sizes else [None]
-
-        # Material: primary → family → details
         material_fields = (
             ["search.material.primary", "search.material.family", "search.material.details", None]
             if materials else [None]
@@ -526,72 +621,70 @@ async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_
 
         results = []
 
-        # Try all combinations in order, stop at first non-empty result
-        for c_field in color_fields:
-            if results:
-                break
-            for s_field in size_fields:
+        def _try_combos(active_sku_filter):
+            for c_field in color_fields:
                 if results:
                     break
-                for m_field in material_fields:
-                    query = _build_mongo_query(
-                        c_field, query_colors,
-                        s_field, sizes,
-                        m_field, materials,
-                        constructions, styles,
-                        price_filter, generics,
-                        color_sku_filter,
-                    )
-                    results = _run_query(query)
+                for s_field in size_fields:
                     if results:
-                        logger.info(
-                            f"Found {len(results)} products "
-                            f"[color={c_field}, size={s_field}, material={m_field}]"
-                        )
                         break
+                    for m_field in material_fields:
+                        query = _build_mongo_query(
+                            c_field, query_colors,
+                            s_field, sizes,
+                            m_field, materials,
+                            constructions, styles,
+                            price_filter, generics,
+                            active_sku_filter,
+                            shapes,
+                        )
+                        found = _run_query(query)
+                        if found:
+                            results.extend(found)
+                            logger.info(f"Found {len(found)} products [color={c_field}, size={s_field}, material={m_field}, sku_filter={'yes' if active_sku_filter else 'no'}]")
+                            break
 
-        # Style fallback: search style keywords in product name/collection/design text
-        # (JR API may not populate the Style field consistently)
+        # First pass: with color_sku_filter
+        _try_combos(color_sku_filter)
+
+        # If color_sku_filter was used but yielded nothing, retry without it (field-based color)
+        if not results and color_sku_filter:
+            logger.info("color_sku_filter returned 0 results — retrying with field-based color search")
+            _try_combos([])
+
+        # Style text fallback
         if not results and styles:
-            style_generics = styles[:]
             query = _build_mongo_query(
-                None, query_colors,
-                None, sizes,
-                None, materials,
-                constructions, [],
-                price_filter, generics + style_generics,
-                color_sku_filter,
+                None, query_colors, None, sizes, None, materials,
+                constructions, [], price_filter, generics + styles,
+                color_sku_filter if color_sku_filter else [],
+                shapes,
             )
             results = _run_query(query)
-            if results:
-                logger.info(f"Style text-fallback found {len(results)} products for styles={styles}")
+            if not results and color_sku_filter:
+                query = _build_mongo_query(
+                    None, query_colors, None, sizes, None, materials,
+                    constructions, [], price_filter, generics + styles, [], shapes,
+                )
+                results = _run_query(query)
 
-        # Fallback: price / weight only (drop keyword filters)
+        # Price/weight only fallback
         if not results and (price_filter or weight_filter):
-            query = _build_mongo_query(None, [], None, [], None, [], [], [], price_filter, [], color_sku_filter)
+            query = _build_mongo_query(None, [], None, [], None, [], [], [], price_filter, [], [], shapes)
             results = _run_query(query)
 
-        # Final fallback: any in-stock product — ONLY when no specific filters were given
-        # (never return random products when the user asked for something specific)
-        has_specific_filter = any([colors, styles, materials, constructions, sizes, generics])
+        # Last resort: any in-stock (only if no specific filters given)
+        has_specific_filter = any([colors, styles, materials, constructions, sizes, shapes, generics])
         if not results and not has_specific_filter:
             results = _run_query({"flags.inStock": True})
 
         if not results:
             return {"error": "No products found."}
 
-        # Weight is post-filtered in Python (may be stored as string in DB)
         if weight_filter is not None:
             results = _apply_weight_filter(results, weight_filter)
 
-        if currency and currency in CURRENCY_FIELDS:
-            pass  # caller already resolved a supported currency
-        else:
-            currency = await _resolve_currency_from_ip(client_ip)
-        currency_field = CURRENCY_FIELDS.get(currency, "INR_MRP")
-
         if color_sku_scores:
-            # Prefer products with highest matched requested color percentage after all filters.
             results = sorted(
                 results,
                 key=lambda p: (
@@ -608,70 +701,10 @@ async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_
         else:
             unique_results = _dedupe_products_by_sku(results)
             selected = random.sample(unique_results, min(3, len(unique_results)))
-        formatted = []
-        for p in selected:
-            raw = p.get("raw", {})
-            search = p.get("search", {})
-            color = search.get("color", {})
-            material = search.get("material", {})
-            size = search.get("size", {})
-            sku = _extract_product_sku(p)
-            color_score = color_sku_scores.get(sku, {})
-            highest_color, highest_percentage = _highest_matched_color(
-                color_score.get("colors", {}),
-                colors,
-            )
-            product_slug = raw.get("ProductURL") or ""
-            formatted.append({
-                "url": (
-                    f"https://www.jaipurrugs.com/in/rugs/{product_slug}?barcode={p.get('BarCode')}"
-                    if product_slug else ""
-                ),
-                "price": {"currency": currency, "amount": raw.get(currency_field)},
-                "name": raw.get("Name", ""),
-                "SKU": sku,
-                "collection": raw.get("Collection", ""),
-                "size": size.get("exact", raw.get("SizeInFT", "")),
-                "shape": search.get("shape", raw.get("Shape", "")),
-                "color": color.get("single", ""),
-                "color_family": color.get("multi", ""),
-                "matched_color_percentage": {
-                    "total": color_score.get("total_percentage", 0),
-                    "by_color": color_score.get("colors", {}),
-                    "highest": {
-                        "color": highest_color,
-                        "percentage": highest_percentage,
-                    },
-                },
-                "style": search.get("style", ""),
-                "construction": search.get("construction", ""),
-                "material": material.get("primary", ""),
-                "fabric": material.get("details", ""),
-                "quality": search.get("quality", ""),
-                "room": search.get("room", []),
-                "weight": search.get("weight", 0.0),
-                "image": raw.get("HeadShot", ""),
-                "mrp": {
-                    "INR": raw.get("INR_MRP"),
-                    "USD": raw.get("USD_MRP"),
-                    "EUR": raw.get("EUR_MRP"),
-                    "GBP": raw.get("GBP_MRP"),
-                    "AUD": raw.get("AUD_MRP"),
-                    "CHF": raw.get("CHF_MRP"),
-                    "SGD": raw.get("SGD_MRP"),
-                    "AED": raw.get("AED_MRP"),
-                },
-            })
 
-        final_log_payload = [
-            {
-                "SKU": item.get("SKU", ""),
-                "matched_color_percentage": item.get("matched_color_percentage", {}),
-            }
-            for item in formatted
-        ]
-        logger.info(f"Final products payload (SKU + color %): {final_log_payload}")
-        logger.info(f"Returning {len(formatted)} products for keyword: {keyword}")
+        formatted = _format_products(selected, currency, currency_field, colors, color_sku_scores)
+
+        logger.info(f"Returning {len(formatted)} products (MongoDB) for keyword: {keyword}")
         return formatted
 
     except Exception as e:
