@@ -1,3 +1,4 @@
+import json
 import random
 import re
 
@@ -32,7 +33,7 @@ KNOWN_CONSTRUCTIONS = {
 KNOWN_STYLES = {
     "modern", "traditional", "contemporary", "bohemian", "abstract",
     "geometric", "floral", "tribal", "oriental", "transitional", "antique",
-    "vintage", "rustic", "minimalist",
+    "vintage", "rustic", "minimalist", "solid",
 }
 
 KNOWN_SHAPES = {
@@ -621,15 +622,27 @@ def _parse_keyword_filters(keyword: str):
             colors.append(lower)
             continue
 
-        # Construction (check before style since "hand knotted" is multi-word)
-        if any(c in lower for c in KNOWN_CONSTRUCTIONS):
-            constructions.append(lower)
-            continue
+        found_shape = ""
+        for shape in sorted(KNOWN_SHAPES, key=len, reverse=True):
+            if re.search(rf"\b{re.escape(shape)}\b", lower):
+                found_shape = "round" if shape in {"circle", "circular"} else shape
+                lower = re.sub(rf"\b{re.escape(shape)}\b", " ", lower).strip()
+                break
+        if found_shape:
+            shapes.append(found_shape)
+            if not lower:
+                continue
 
-        # Shape
-        if lower in KNOWN_SHAPES:
-            shapes.append("round" if lower in {"circle", "circular"} else lower)
-            continue
+        found_construction = ""
+        for construction in sorted(KNOWN_CONSTRUCTIONS, key=len, reverse=True):
+            if re.search(rf"\b{re.escape(construction)}\b", lower):
+                found_construction = construction
+                lower = re.sub(rf"\b{re.escape(construction)}\b", " ", lower).strip()
+                break
+        if found_construction:
+            constructions.append(found_construction)
+            if not lower:
+                continue
 
         # Material
         if lower in KNOWN_MATERIALS:
@@ -808,6 +821,7 @@ def _format_raw_api_products(
     products: list[dict],
     currency: str,
     requested_colors: list[str],
+    source_query: str = "",
     max_items: int = 3,
 ) -> list[dict]:
     if isinstance(products, dict):
@@ -840,6 +854,8 @@ def _format_raw_api_products(
         slug = raw.get("ProductURL") or ""
         barcode = raw.get("BarCode") or sku
         formatted.append({
+            "source": "jr_product_api",
+            "source_query": source_query,
             "url": (
                 f"https://www.jaipurrugs.com/in/rugs/{slug}?barcode={barcode}"
                 if slug
@@ -887,6 +903,136 @@ def _format_raw_api_products(
     return formatted
 
 
+def _raw_text_matches(value: str, requested: str) -> bool:
+    return _color_text_has_requested(str(value or ""), requested)
+
+
+def _raw_api_product_matches(
+    raw: dict,
+    colors: list[str],
+    materials: list[str],
+    constructions: list[str],
+    styles: list[str],
+    shapes: list[str],
+    sizes: list[str],
+    price_filter: dict | None,
+    weight_filter: float | None,
+) -> bool:
+    if colors:
+        color_text = " ".join(str(raw.get(key) or "") for key in ("GrColor", "ColorFamily"))
+        if not all(_raw_text_matches(color_text, color) for color in colors):
+            return False
+
+    if materials:
+        material_text = " ".join(
+            str(raw.get(key) or "")
+            for key in ("Material", "MaterialDetails", "MaterialFamilies")
+        )
+        if not all(_raw_text_matches(material_text, material) for material in materials):
+            return False
+
+    if constructions:
+        construction_text = str(raw.get("Construction") or "")
+        if not all(_raw_text_matches(construction_text, construction) for construction in constructions):
+            return False
+
+    if styles:
+        strict_styles = [style for style in styles if style != "solid"]
+        style_text = " ".join(
+            str(raw.get(key) or "")
+            for key in ("Style", "Collection", "Design", "Name")
+        )
+        if strict_styles and not all(_raw_text_matches(style_text, style) for style in strict_styles):
+            return False
+
+    if shapes:
+        shape_text = str(raw.get("Shape") or "")
+        if not all(_raw_text_matches(shape_text, shape) for shape in shapes):
+            return False
+
+    if sizes:
+        size_text = str(raw.get("SizeInFT") or "").replace(" ", "").lower()
+        if not all(size.replace(" ", "").lower() in size_text for size in sizes):
+            return False
+
+    if price_filter:
+        amount = raw.get(CURRENCY_FIELDS.get(price_filter.get("currency"), "INR_MRP"))
+        try:
+            amount = float(str(amount).replace(",", ""))
+        except (TypeError, ValueError):
+            return False
+        if "min_amount" in price_filter and amount < price_filter["min_amount"]:
+            return False
+        if "max_amount" in price_filter and amount > price_filter["max_amount"]:
+            return False
+        if "amount" in price_filter:
+            operator = price_filter.get("operator") or "$lte"
+            if operator == "$gte" and amount < price_filter["amount"]:
+                return False
+            if operator == "$lte" and amount > price_filter["amount"]:
+                return False
+
+    if weight_filter is not None:
+        try:
+            if float(raw.get("Weight") or 0) > weight_filter:
+                return False
+        except (TypeError, ValueError):
+            return False
+
+    return True
+
+
+def _dedupe_raw_api_products(products: list[dict]) -> list[dict]:
+    unique = []
+    seen = set()
+    for raw in products:
+        if not isinstance(raw, dict):
+            continue
+        key = _api_product_sku(raw) or _normalize_sku(raw.get("ProductURL"))
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        unique.append(raw)
+    return unique
+
+
+async def _search_api_candidates(
+    keyword: str,
+    colors: list[str],
+    materials: list[str],
+    constructions: list[str],
+    styles: list[str],
+    shapes: list[str],
+    sizes: list[str],
+) -> tuple[list[dict], str]:
+    queries = [keyword]
+    queries.extend(colors)
+    queries.extend(materials)
+    queries.extend(constructions)
+    queries.extend(styles)
+    queries.extend(shapes)
+    queries.extend(sizes)
+
+    candidates = []
+    used_queries = []
+    for query in dict.fromkeys(q for q in queries if q):
+        products = await _jr_search_products(query)
+        if isinstance(products, dict):
+            products = (
+                products.get("data")
+                or products.get("products")
+                or products.get("result")
+                or products.get("items")
+                or []
+            )
+        if isinstance(products, list) and products:
+            candidates.extend(products)
+            used_queries.append(query)
+
+    return _dedupe_raw_api_products(candidates), " | ".join(used_queries)
+
+
 async def jaipur_rugs_product_search(
     keyword: str,
     client_ip: str = "",
@@ -913,16 +1059,44 @@ async def jaipur_rugs_product_search(
         currency = _normalize_currency_code(currency)
 
         try:
-            api_products = await _jr_search_products(keyword)
+            api_products, api_source_query = await _search_api_candidates(
+                keyword=keyword,
+                colors=colors,
+                materials=materials,
+                constructions=constructions,
+                styles=styles,
+                shapes=shapes,
+                sizes=sizes,
+            )
+            api_filtered = [
+                raw for raw in api_products
+                if _raw_api_product_matches(
+                    raw,
+                    colors=colors,
+                    materials=materials,
+                    constructions=constructions,
+                    styles=styles,
+                    shapes=shapes,
+                    sizes=sizes,
+                    price_filter=price_filter,
+                    weight_filter=weight_filter,
+                )
+            ]
+            has_api_filters = any([colors, materials, constructions, styles, shapes, sizes, price_filter, weight_filter])
+            if api_filtered:
+                api_products = api_filtered
+            elif has_api_filters:
+                api_products = []
             api_formatted = _format_raw_api_products(
                 api_products,
                 currency=currency,
                 requested_colors=colors,
+                source_query=api_source_query,
                 max_items=3,
             )
             if api_formatted:
                 logger.info(
-                    f"Returning {len(api_formatted)} products from JR product-master-search for keyword: {keyword}"
+                    f"Returning {len(api_formatted)} products from JR product-master-search for keyword: {keyword}; source_query={api_source_query}"
                 )
                 return api_formatted
         except Exception as api_error:
@@ -1060,6 +1234,8 @@ async def jaipur_rugs_product_search(
             price_amount = raw.get(currency_field)
             display_price = _build_display_price(currency, price_amount)
             formatted.append({
+                "source": "mongo_fallback",
+                "source_query": json.dumps(query, default=str) if "query" in locals() else "",
                 "url": f"https://www.jaipurrugs.com/in/rugs/{raw.get('ProductURL')}?barcode={p.get('BarCode')}",
                 "price": {"currency": currency, "amount": price_amount},
                 "display_currency": currency,
