@@ -14,6 +14,7 @@ from qlink_chatbot.agent.utils.chat_agent_prompts import (
 )
 from qlink_chatbot.database.mongo_utils import (
     internal_collection,
+    sessions_collection,
     toggle_ai,
     whatsapp_sessions_collection,
 )
@@ -103,6 +104,99 @@ def get_stats():
         "inbound_messages": inbound,
         "outbound_messages": outbound,
         "whatsapp_number": qlink_gupshup_source,
+    }
+
+
+@dashboard_router.get("/dashboard/insights")
+def get_dashboard_insights():
+    """Aggregate metrics for the admin home dashboard."""
+    from datetime import timedelta
+    from collections import Counter
+
+    COLORS = {
+        "red", "blue", "green", "yellow", "orange", "purple", "pink", "white",
+        "black", "grey", "gray", "brown", "beige", "ivory", "cream", "navy",
+        "teal", "turquoise", "gold", "silver", "rust", "coral", "indigo",
+        "maroon", "burgundy", "charcoal", "olive", "mustard", "peach", "lavender",
+    }
+
+    fields = {"chat_history": 1, "previous_searches": 1, "country_code": 1,
+              "geo": 1, "updated_at": 1}
+    web_sessions = list(sessions_collection.find({}, fields))
+    wa_sessions  = list(whatsapp_sessions_collection.find({}, fields))
+    all_sessions = web_sessions + wa_sessions
+
+    # --- Overview ---
+    ten_min_ago  = datetime.utcnow() - timedelta(minutes=10)
+    active_users = sum(
+        1 for s in all_sessions
+        if isinstance(s.get("updated_at"), datetime) and s["updated_at"] > ten_min_ago
+    )
+    total_messages = sum(len(s.get("chat_history") or []) for s in all_sessions)
+
+    # --- Insights ---
+    keyword_counter = Counter()
+    color_counter   = Counter()
+    location_counter = Counter()
+    hour_counter    = Counter()
+
+    for session in all_sessions:
+        # Keywords & colors from previous_searches
+        for search in (session.get("previous_searches") or []):
+            kw = (search.get("keyword") or "").strip().lower()
+            if kw:
+                keyword_counter[kw] += 1
+                for part in kw.replace("&", " ").split():
+                    if part in COLORS:
+                        color_counter[part] += 1
+
+        # Location: prefer geo.country, fall back to country_code
+        geo = session.get("geo") or {}
+        loc = geo.get("country") or geo.get("country_code") or session.get("country_code") or ""
+        if loc:
+            location_counter[loc.upper()] += 1
+
+        # Active hour from user message timestamps
+        for msg in (session.get("chat_history") or []):
+            if msg.get("role") == "user":
+                ts = msg.get("timestamp")
+                if isinstance(ts, datetime):
+                    # Convert UTC → IST (+5:30)
+                    ist_hour = (ts.hour + 5) % 24
+                    hour_counter[ist_hour] += 1
+
+    # Most searched keyword
+    most_searched = keyword_counter.most_common(1)
+    most_searched_kw = most_searched[0][0].title() if most_searched else "N/A"
+
+    # Peak active hour (IST)
+    if hour_counter:
+        peak = hour_counter.most_common(1)[0][0]
+        active_time = f"{peak:02d}:00 – {(peak + 1) % 24:02d}:00 IST"
+    else:
+        active_time = "N/A"
+
+    # Highest traffic location
+    top_loc = location_counter.most_common(1)
+    highest_location = top_loc[0][0] if top_loc else "N/A"
+
+    # Highest interested color
+    top_color = color_counter.most_common(1)
+    highest_color = top_color[0][0].title() if top_color else "N/A"
+
+    return {
+        "overview": {
+            "active_users": active_users,
+            "total_users": len(web_sessions),
+            "total_leads": len(wa_sessions),
+            "total_messages": total_messages,
+        },
+        "insights": {
+            "most_searched_keyword": most_searched_kw,
+            "active_time": active_time,
+            "highest_traffic_location": highest_location,
+            "highest_interested_color": highest_color,
+        },
     }
 
 
