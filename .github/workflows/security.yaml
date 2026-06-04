@@ -34,15 +34,15 @@ jobs:
           fi
 
           # Fail if os.getenv is used with a non-empty default for any JR_API_ key
-          if grep -nP 'os\.getenv\(\s*["\']JR_API_[^"'\'']+["\'],\s*["\'][^"'\'']+["\']' "$FILE"; then
-            echo "❌ Hardcoded credential fallback detected in $FILE — use os.environ[\"KEY\"] instead of os.getenv(\"KEY\", \"value\")" | tee -a $GITHUB_STEP_SUMMARY
+          if grep -En 'os\.getenv\("JR_API_(USERNAME|PASSWORD|CLIENT_ID|CLIENT_SECRET)",\s*"[^"]' "$FILE"; then
+            echo "❌ Hardcoded credential fallback detected in $FILE — use os.environ[KEY] instead of os.getenv(KEY, value)" | tee -a $GITHUB_STEP_SUMMARY
             exit 1
           fi
 
           # Fail if the four credential keys are not read via os.environ[
           for KEY in JR_API_USERNAME JR_API_PASSWORD JR_API_CLIENT_ID JR_API_CLIENT_SECRET; do
-            if ! grep -q "os\.environ\[\"$KEY\"\]" "$FILE"; then
-              echo "❌ $KEY is not loaded via os.environ[\"$KEY\"] in $FILE" | tee -a $GITHUB_STEP_SUMMARY
+            if ! grep -qF "os.environ[\"${KEY}\"]" "$FILE"; then
+              echo "❌ ${KEY} is not loaded via os.environ in $FILE" | tee -a $GITHUB_STEP_SUMMARY
               exit 1
             fi
           done

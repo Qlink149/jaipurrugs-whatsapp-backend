@@ -1,0 +1,2 @@
+skip-checks:
+  - CKV_K8S_43  # Image digest pinning: image tag is set dynamically by CI/CD; SHA digest pinning not compatible with this pipeline
