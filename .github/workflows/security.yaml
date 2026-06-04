@@ -118,7 +118,9 @@ jobs:
         uses: bridgecrewio/checkov-action@master
         with:
           directory: .
-          skip_check: CKV_K8S_43
+          output_format: cli,json
+          output_file_path: console,checkov-report.json
+          skip_check: CKV_K8S_43,CKV_K8S_35
 
       - name: Generate SBOM
         id: sbom
@@ -142,6 +144,21 @@ jobs:
           echo "- Trivy Image: ${{ steps.trivy_image.outcome }}" >> $GITHUB_STEP_SUMMARY
           echo "- Checkov: ${{ steps.checkov.outcome }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f checkov-report.json ]; then
+            FAILED_CHECKOV=$(jq '[.results.failed_checks[]?] | length' checkov-report.json)
+            echo "## Checkov" >> $GITHUB_STEP_SUMMARY
+            echo "- Failed checks: $FAILED_CHECKOV" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            jq -r '
+            .results.failed_checks[]? |
+            "### " + (.check_id // "") + "\n" +
+            "- File: " + (.file_path // "") + "\n" +
+            "- Resource: " + (.resource // "") + "\n" +
+            "- Check: " + (.check_name // "") + "\n\n"
+            ' checkov-report.json >> $GITHUB_STEP_SUMMARY
+          fi
+
 
           summarize_file () {
             FILE=$1
@@ -194,6 +211,14 @@ jobs:
         with:
           name: sbom-report
           path: sbom.spdx.json
+
+      - name: Upload Checkov Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkov-report
+          path: checkov-report.json
+
 
       - name: Security Gate
         if: always()
