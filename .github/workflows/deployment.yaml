@@ -15,8 +15,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Login to Vultr Container Registry
-        run: |
-          echo "${{ secrets.VULTR_REGISTRY_PASSWORD }}" | docker login -u "${{ secrets.VULTR_REGISTRY_USERNAME }}" --password-stdin ${{ secrets.VULTR_REGISTRY_URL }}
+        uses: docker/login-action@v3
+        with:
+          registry: sgp.vultrcr.com
+          username: ${{ secrets.VULTR_REGISTRY_USERNAME }}
+          password: ${{ secrets.VULTR_REGISTRY_PASSWORD }}
 
       - name: Build and push Docker image
         run: |
@@ -31,8 +34,9 @@ jobs:
           host: "65.20.74.206"
           username: root
           password: "3G)jy%N{?oj[m-bA"
+          envs: VULTR_REGISTRY_USERNAME,VULTR_REGISTRY_PASSWORD
           script: |
-            echo "${{ secrets.VULTR_REGISTRY_PASSWORD }}" | docker login -u "${{ secrets.VULTR_REGISTRY_USERNAME }}" --password-stdin ${{ secrets.VULTR_REGISTRY_URL }}
+            echo "$VULTR_REGISTRY_PASSWORD" | docker login -u "$VULTR_REGISTRY_USERNAME" --password-stdin sgp.vultrcr.com
             docker pull sgp.vultrcr.com/qlink01/jr_web_backend:latest
             docker stop qlink_web || true
             docker rm qlink_web || true
