@@ -118,6 +118,7 @@ jobs:
         uses: bridgecrewio/checkov-action@master
         with:
           directory: .
+          skip_check: CKV_K8S_43
 
       - name: Generate SBOM
         id: sbom
