@@ -1,0 +1,80 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Vultr Container Registry
+        run: |
+          docker login -u ${{ secrets.VULTR_REGISTRY_USERNAME }} -p ${{ secrets.VULTR_REGISTRY_PASSWORD }} ${{ secrets.VULTR_REGISTRY_URL }}
+
+      - name: Build and push Docker image
+        run: |
+          export DOCKER_BUILDKIT=1
+          REGISTRY_PATH="sgp.vultrcr.com/qlink01/jr_backend"
+          docker build -t $REGISTRY_PATH:latest .
+          docker push $REGISTRY_PATH:latest
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          script: |
+            docker login -u ${{ secrets.VULTR_REGISTRY_USERNAME }} -p ${{ secrets.VULTR_REGISTRY_PASSWORD }} ${{ secrets.VULTR_REGISTRY_URL }}
+            docker pull sgp.vultrcr.com/qlink01/jr_backend:latest
+            docker stop qlink || true
+            docker rm qlink || true
+            docker run -d \
+              --name qlink \
+              -p 8000:8000 \
+              -e PYTHONUNBUFFERED=1 \
+              -e PYTHONDONTWRITEBYTECODE=1 \
+              -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
+              -e MONGO_URI=${{ secrets.MONGO_URI }} \
+              -e GUPSHUP_APP_ID=${{ secrets.GUPSHUP_APP_ID }} \
+              -e GUPSHUP_TOKEN=${{ secrets.GUPSHUP_TOKEN }} \
+              -e GUPSHUP_APP_NAME=${{ secrets.GUPSHUP_APP_NAME }} \
+              -e GUPSHUP_API_KEY=${{ secrets.GUPSHUP_API_KEY }} \
+              -e GUPSHUP_SOURCE=${{ secrets.GUPSHUP_SOURCE }} \
+              -e DEFAULT_COUNTRY_CODE=${{ secrets.DEFAULT_COUNTRY_CODE }} \
+              -e ENV_MODE=${{ secrets.ENV_MODE }} \
+              -e PINECONE_API=${{ secrets.PINECONE_API }} \
+              -e R2_ACCESS_KEY=${{ secrets.R2_ACCESS_KEY }} \
+              -e R2_SECRET_KEY=${{ secrets.R2_SECRET_KEY }} \
+              -e WHAPI_TOKEN=${{ secrets.WHAPI_TOKEN }} \
+              -e WEBHOOK_API=${{ secrets.WEBHOOK_API }} \
+              -e QLINK_GUPSHUP_APP_ID=${{ secrets.QLINK_GUPSHUP_APP_ID }} \
+              -e QLINK_GUPSHUP_PARTNER_APP_TOKEN=${{ secrets.QLINK_GUPSHUP_PARTNER_APP_TOKEN }} \
+              -e QLINK_GUPSHUP_SOURCE=${{ secrets.QLINK_GUPSHUP_SOURCE }} \
+              -e QLINK_GUPSHUP_APP_NAME=${{ secrets.QLINK_GUPSHUP_APP_NAME }} \
+              -e JR_API_USERNAME=${{ secrets.JR_API_USERNAME }} \
+              -e JR_API_PASSWORD=${{ secrets.JR_API_PASSWORD }} \
+              -e JR_API_CLIENT_ID=${{ secrets.JR_API_CLIENT_ID }} \
+              -e JR_API_CLIENT_SECRET=${{ secrets.JR_API_CLIENT_SECRET }} \
+              -e CORS_ORIGINS=${{ secrets.CORS_ORIGINS }} \
+              sgp.vultrcr.com/qlink01/jr_backend
+
+      - name: Cleanup
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          script: docker image prune -f
+
+      - name: Mirror to WhatsApp backend repo (triggers Vercel)
+        run: |
+          git remote add whatsapp https://x-access-token:${{ secrets.GH_PAT }}@github.com/Qlink149/jaipurrugs-whatsapp-backend.git
+          git push whatsapp HEAD:main --force
