@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 from openai import AsyncOpenAI
@@ -9,6 +10,7 @@ from qlink_chatbot.database.mongo_utils import (
     get_previous_search,
     raise_alert,
     return_system_prompt,
+    save_callback_phone,
     save_previous_search,
     save_user_name,
     user_name,
@@ -101,7 +103,37 @@ tools = [
             "required": ["alert"]
         }
     },
+    {
+        "type": "function",
+        "name": "save_callback_phone",
+        "description": "Save the user's phone number after they request a callback, so agents can see it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "phone": {
+                    "type": "string",
+                    "description": "The user's phone number, including country code if provided."
+                }
+            },
+            "required": ["phone"]
+        }
+    },
 ]
+
+
+_IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
+
+
+def _user_content(text: str):
+    """Return plain string for text-only messages, or a multimodal list when images are present."""
+    urls = _IMAGE_MD_RE.findall(text)
+    if not urls:
+        return text
+    clean = _IMAGE_MD_RE.sub("", text).strip()
+    content = [{"type": "input_text", "text": clean or "I have shared an image."}]
+    for url in urls:
+        content.append({"type": "input_image", "image_url": url, "detail": "auto"})
+    return content
 
 
 def format_recent_chat_for_ai(chat_history, limit: int = 10) -> str:
@@ -196,7 +228,7 @@ async def chat_agent(
             {"role": "developer", "content": "When `jaipur_rugs_product_search` returns multiple products, include all returned products (up to 3) in the final user-visible response. Do not show only one unless only one was returned."},
             {"role": "developer", "content": "If the user asks price/size/material/weight/link for a previously shown rug, answer from Latest shown products context. For currency requests, use exact values from `mrp` for INR, AED, AUD, CHF, EUR, GBP, SGD, USD. Do not convert between currencies, do not estimate, and do not use exchange rates. If requested currency value is missing, clearly say it is unavailable."},
             {"role": "developer", "content": "Only when the response contains actual rug results returned by the `jaipur_rugs_product_search` tool, append this exact line at the very end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'. Do NOT add it for cleaning, care, order, careers, custom rug, or any non-product response."},
-            {"role": "user", "content": user_message}
+            {"role": "user", "content": _user_content(user_message)}
         ]
 
 
@@ -225,7 +257,7 @@ async def chat_agent(
                 output = ""
                 if item.name == "jaipur_rugs_product_search":
                     keyword = args.get("keyword")
-                    products = await jaipur_rugs_product_search(keyword, client_ip=client_ip, country_code=country_code)
+                    products = await jaipur_rugs_product_search(keyword, client_ip=client_ip, country_code=country_code, currency=detected_currency)
                     save_previous_search(
                         session_id,
                         keyword,
@@ -259,6 +291,11 @@ async def chat_agent(
                     alert = args.get("alert")
                     agent_alert_tool(alert=alert, sesson_id=session_id)
                     output = json.dumps({"status": "success"})
+
+                elif item.name == "save_callback_phone":
+                    phone = args.get("phone", "")
+                    save_callback_phone(session_id, phone, collection_name=collection_name)
+                    output = json.dumps({"status": "saved", "phone": phone})
 
                 input_list.append({
                     "type": "function_call_output",

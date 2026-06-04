@@ -503,6 +503,29 @@ async def sync_products():
     return {"synced": synced, "skipped": skipped}
 
 
+@dashboard_router.get("/debug/price-fields")
+def debug_price_fields(limit: int = 5):
+    """Return MRP fields for a sample of products so you can verify the JR API populated them."""
+    MRP_KEYS = ["INR_MRP", "USD_MRP", "EUR_MRP", "GBP_MRP", "AUD_MRP", "CHF_MRP", "SGD_MRP", "AED_MRP"]
+    docs = list(website_products_collection.find(
+        {"flags.inStock": True},
+        {"_id": 0, "raw.Name": 1, "raw.SKU": 1, **{f"raw.{k}": 1 for k in MRP_KEYS}},
+    ).limit(limit))
+    result = []
+    for doc in docs:
+        raw = doc.get("raw", {})
+        result.append({
+            "name": raw.get("Name", ""),
+            "sku": raw.get("SKU", ""),
+            **{k: raw.get(k) for k in MRP_KEYS},
+        })
+    null_usd = sum(1 for r in result if not r.get("USD_MRP"))
+    return {
+        "sample": result,
+        "note": f"{null_usd}/{len(result)} sampled products have null/0 USD_MRP — if this is high, USD price filtering will return no results",
+    }
+
+
 @dashboard_router.post("/conversations/{phone}/toggle-ai")
 def toggle_conversation_ai(phone: str):
     """Toggle AI on/off for a WhatsApp conversation (human-agent handoff)."""

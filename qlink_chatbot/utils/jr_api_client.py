@@ -57,7 +57,11 @@ async def search_products(keyword: str) -> list[dict]:
             logger.warning("JR API: 401 on product search — retrying with fresh token")
             continue
         resp.raise_for_status()
-        return resp.json() or []
+        try:
+            return resp.json() or []
+        except Exception:
+            logger.error(f"JR API product-master-search returned non-JSON: {resp.text[:300]}")
+            return []
     return []
 
 
@@ -78,5 +82,9 @@ async def get_all_products() -> list[dict]:
             logger.warning("JR API: 401 on product master — retrying with fresh token")
             continue
         resp.raise_for_status()
-        return resp.json() or []
+        try:
+            return resp.json() or []
+        except Exception:
+            logger.error(f"JR API product-master returned non-JSON: {resp.text[:300]}")
+            return []
     return []

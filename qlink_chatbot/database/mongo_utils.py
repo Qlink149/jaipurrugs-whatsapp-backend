@@ -172,6 +172,22 @@ def get_session_by_id(session_id: str, collection_name: str = "users"):
         raise e
 
 
+def save_callback_phone(session_id: str, phone: str, collection_name: str = "users"):
+    """Store a callback phone number on the session so agents can see it."""
+    try:
+        now = datetime.utcnow()
+        session_collection = _get_sessions_collection(collection_name=collection_name)
+        session_collection.update_one(
+            {"session_id": session_id},
+            {"$set": {"callback_phone": phone, "updated_at": now}},
+            upsert=True,
+        )
+        logger.info(f"Saved callback phone for session {session_id}: {phone}")
+    except Exception as e:
+        logger.error("Error saving callback phone", extra={"error": e})
+        raise e
+
+
 def save_user_name(session_id: str, name: str, collection_name: str = "users"):
     """Store or update the user's name in the session."""
     try:

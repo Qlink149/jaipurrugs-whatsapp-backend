@@ -166,6 +166,16 @@ system_data_source_rule = """
 - Construction types: Hand Knotted, Hand Tufted, Hand Loom, Flat Weaves, Shag.
 """
 
+system_image_rules = """
+Handling image messages:
+- When the user's message contains an image (markdown `![...](url)` or a direct image URL), you CAN see it — do NOT say you cannot view or process images.
+- Describe what you see in the image briefly to confirm receipt, then respond based on context:
+  - Custom rug design / pattern / inspiration image: call raise_agent_alert with "User shared a custom rug design image: [url]". Then ask: "Thank you for sharing your design! I've forwarded it to our rug specialists. To help them prepare the best proposal, could you also share: (1) the dimensions you need, (2) preferred colors or style (if different from the image), and (3) your delivery location?"
+  - Product / existing rug inquiry: describe what you see and assist normally.
+  - Cleaning / damaged rug: acknowledge and guide them to the cleaning service.
+- Never say "I cannot view attachments" or "I'm unable to process images."
+"""
+
 system_others = """"""
 
 system_agent_handoff_rules = """
@@ -184,6 +194,15 @@ You are given the current IST time in the context. Use it to determine whether a
 3. User asks about bulk orders / quantity discounts / wholesale / corporate pricing (at ANY time):
    - Always call raise_agent_alert with "User enquiring about bulk/quantity discount".
    - Respond: "Great question! For bulk orders and quantity discounts, I've flagged this for our team and an agent will reach out to you shortly. You can also email us at shop@jaipurrugs.com."
+
+4. User requests a callback (e.g., "please call me back", "can someone call me", "I want a call", "call me"):
+   - Do NOT raise an alert yet and do NOT say the agent has been notified yet.
+   - First ask: "Of course! Could you please share your phone number (with country code) so our specialist can reach you?"
+   - Once the user provides their number:
+     a. Call `save_callback_phone` with the number.
+     b. Call `raise_agent_alert` with "Callback requested. Phone: [number]".
+     c. Respond: "Thank you! Our rug specialist will call you at [number] during business hours (Mon–Sat, 9 AM – 7 PM IST)."
+   - Never confirm the callback without first collecting and saving the phone number.
 """
 
 
@@ -200,6 +219,7 @@ def build_system_prompt(
     system_data_source_rule: str = system_data_source_rule,
     system_others: str = system_others,
     system_agent_handoff_rules: str = system_agent_handoff_rules,
+    system_image_rules: str = system_image_rules,
 ) -> str:
     """Combines all system prompt sections into one final prompt string."""
     sections = [
@@ -212,6 +232,7 @@ def build_system_prompt(
         system_fallback_rules.strip(),
         system_data_source_rule.strip(),
         system_agent_handoff_rules.strip(),
+        system_image_rules.strip(),
         system_others.strip(),
     ]
     return "\n\n".join(s for s in sections if s)

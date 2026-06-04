@@ -2,13 +2,14 @@ import httpx
 
 from qlink_chatbot.utils.logger_config import logger
 
-# Country ISO code → currency code
+# Country ISO code → currency code (only currencies supported by JR pricing: INR, AED, USD, GBP, AUD, SGD, CHF, EUR)
 _COUNTRY_CURRENCY: dict[str, str] = {
     "IN": "INR",
-    "AE": "AED",
-    "US": "USD",
+    # GCC — all mapped to AED (JR's supported Gulf currency)
+    "AE": "AED", "SA": "AED", "QA": "AED", "KW": "AED", "BH": "AED", "OM": "AED",
+    "US": "USD", "CA": "USD",  # North America
     "GB": "GBP",
-    "AU": "AUD",
+    "AU": "AUD", "NZ": "AUD",  # Oceania
     "SG": "SGD",
     "CH": "CHF",
     # Eurozone
@@ -16,10 +17,8 @@ _COUNTRY_CURRENCY: dict[str, str] = {
     "BE": "EUR", "AT": "EUR", "PT": "EUR", "FI": "EUR", "IE": "EUR",
     "GR": "EUR", "LU": "EUR", "SK": "EUR", "SI": "EUR", "EE": "EUR",
     "LV": "EUR", "LT": "EUR", "CY": "EUR", "MT": "EUR",
-    # Other common markets
-    "SA": "SAR", "QA": "QAR", "KW": "KWD", "BH": "BHD", "OM": "OMR",
-    "CA": "CAD", "NZ": "NZD", "JP": "JPY", "CN": "CNY",
-    "ZA": "ZAR", "MX": "MXN", "BR": "BRL",
+    # Other markets — default to USD (closest supported international currency)
+    "JP": "USD", "CN": "USD", "ZA": "USD", "MX": "USD", "BR": "USD",
 }
 
 _PRIVATE_PREFIXES = ("10.", "172.16.", "172.17.", "172.18.", "172.19.",

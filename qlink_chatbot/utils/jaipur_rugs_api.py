@@ -84,7 +84,7 @@ def _extract_colors_from_text(text: str) -> tuple[list[str], str]:
 
     # Match longer color words first (e.g. multicolor before multi).
     for color in sorted(COMMON_COLORS, key=len, reverse=True):
-        pattern = rf"\\b{re.escape(color)}\\b"
+        pattern = rf"\b{re.escape(color)}\b"
         if re.search(pattern, residual):
             extracted.append(color)
             residual = re.sub(pattern, " ", residual)
@@ -485,7 +485,7 @@ async def _resolve_currency_from_ip(ip: str) -> str:
     return DEFAULT_CURRENCY
 
 
-async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_code: str = ""):  # country_code kept for caller compatibility
+async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_code: str = "", currency: str = ""):  # country_code kept for caller compatibility
     """Search products from MongoDB with progressive field fallback."""
     try:
         colors, materials, constructions, styles, sizes, price_filter, weight_filter, generics = _parse_keyword_filters(keyword)
@@ -584,7 +584,10 @@ async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_
         if weight_filter is not None:
             results = _apply_weight_filter(results, weight_filter)
 
-        currency = await _resolve_currency_from_ip(client_ip)
+        if currency and currency in CURRENCY_FIELDS:
+            pass  # caller already resolved a supported currency
+        else:
+            currency = await _resolve_currency_from_ip(client_ip)
         currency_field = CURRENCY_FIELDS.get(currency, "INR_MRP")
 
         if color_sku_scores:
@@ -618,8 +621,12 @@ async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_
                 color_score.get("colors", {}),
                 colors,
             )
+            product_slug = raw.get("ProductURL") or ""
             formatted.append({
-                "url": f"https://www.jaipurrugs.com/in/rugs/{raw.get('ProductURL')}?barcode={p.get('BarCode')}",
+                "url": (
+                    f"https://www.jaipurrugs.com/in/rugs/{product_slug}?barcode={p.get('BarCode')}"
+                    if product_slug else ""
+                ),
                 "price": {"currency": currency, "amount": raw.get(currency_field)},
                 "name": raw.get("Name", ""),
                 "SKU": sku,
