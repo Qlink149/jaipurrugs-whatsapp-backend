@@ -1,0 +1,10 @@
+# Findings from commit f55c934 have been remediated:
+# - Credentials removed from jr_api_client.py (now uses os.environ["KEY"] with no fallback)
+# - example.env scrubbed to placeholder values
+# - All affected credentials have been rotated
+# These fingerprints suppress the historical commit from blocking CI.
+# DO NOT add new fingerprints here — fix the code instead.
+f55c934:qlink_chatbot/utils/jr_api_client.py:13
+f55c934:qlink_chatbot/utils/jr_api_client.py:14
+f55c934:example.env:33
+f55c934:example.env:34
