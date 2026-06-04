@@ -4,7 +4,6 @@ import re
 import httpx
 
 from qlink_chatbot.database.mongo_utils import db
-from qlink_chatbot.utils.jr_api_client import search_products as _jr_search_products
 from qlink_chatbot.utils.logger_config import logger
 
 products_collection = db["products"]
@@ -35,96 +34,10 @@ KNOWN_STYLES = {
     "vintage", "rustic", "minimalist",
 }
 
-KNOWN_SHAPES = {
-    "round", "rectangle", "rectangular", "runner", "square", "oval",
-    "irregular", "octagon", "circle", "circular",
-}
-
 CURRENCY_FIELDS = {
     "INR": "INR_MRP", "USD": "USD_MRP", "EUR": "EUR_MRP",
     "GBP": "GBP_MRP", "AUD": "AUD_MRP", "CHF": "CHF_MRP",
     "SGD": "SGD_MRP", "AED": "AED_MRP",
-}
-
-CURRENCY_ALIASES = {
-    "inr": "INR",
-    "rs": "INR",
-    "rupee": "INR",
-    "rupees": "INR",
-    "usd": "USD",
-    "dollar": "USD",
-    "dollars": "USD",
-    "eur": "EUR",
-    "euro": "EUR",
-    "euros": "EUR",
-    "gbp": "GBP",
-    "pound": "GBP",
-    "pounds": "GBP",
-    "aud": "AUD",
-    "chf": "CHF",
-    "sgd": "SGD",
-    "aed": "AED",
-}
-
-PRICE_OPERATOR_WORDS = {
-    "above": "$gte",
-    "over": "$gte",
-    "more than": "$gte",
-    "greater than": "$gte",
-    "higher than": "$gte",
-    "minimum": "$gte",
-    "min": "$gte",
-    "from": "$gte",
-    "starting from": "$gte",
-    "at least": "$gte",
-    "below": "$lte",
-    "under": "$lte",
-    "less than": "$lte",
-    "lower than": "$lte",
-    "maximum": "$lte",
-    "max": "$lte",
-    "up to": "$lte",
-    "upto": "$lte",
-    "within": "$lte",
-    "budget": "$lte",
-    "for": "$lte",
-}
-
-PRICE_CONTEXT_WORDS = {
-    "price", "priced", "cost", "costing", "amount", "budget", "range",
-    "mrp", "rs", "rupee", "rupees", "inr", "usd", "eur", "gbp", "aud",
-    "chf", "sgd", "aed", "dollar", "dollars", "euro", "euros", "pound",
-    "pounds",
-}
-
-AMOUNT_MULTIPLIERS = {
-    "k": 1_000,
-    "thousand": 1_000,
-    "l": 100_000,
-    "lac": 100_000,
-    "lacs": 100_000,
-    "lakh": 100_000,
-    "lakhs": 100_000,
-    "lc": 100_000,
-    "cr": 10_000_000,
-    "crore": 10_000_000,
-    "crores": 10_000_000,
-    "m": 1_000_000,
-    "million": 1_000_000,
-}
-
-GENERIC_NOISE_WORDS = {
-    "show", "me", "find", "search", "looking", "look", "need", "want",
-    "please", "rug", "rugs", "carpet", "carpets", "price", "priced",
-    "cost", "costing", "range", "amount", "any", "some", "options",
-    "option", "products", "product",
-    "inr", "usd", "eur", "gbp", "aud", "chf", "sgd", "aed",
-    "dollar", "dollars", "euro", "euros", "pound", "pounds",
-}
-
-MATERIAL_QUALIFIER_WORDS = {
-    "pure", "all", "full", "fully", "only", "made", "from", "material",
-    "materials", "fabric", "fabrics",
 }
 
 CALLING_CODE_TO_CURRENCY: dict[str, str] = {
@@ -181,184 +94,6 @@ def _extract_colors_from_text(text: str) -> tuple[list[str], str]:
     residual = re.sub(r"\s+", " ", residual).strip()
 
     return extracted, residual
-
-
-def _extract_materials_from_text(text: str) -> tuple[list[str], str]:
-    """Extract known materials from free text and ignore purity percentages."""
-    extracted: list[str] = []
-    residual = re.sub(r"\b\d+(?:\.\d+)?\s*%", " ", text)
-
-    for material in sorted(KNOWN_MATERIALS, key=len, reverse=True):
-        pattern = rf"\b{re.escape(material)}\b"
-        if re.search(pattern, residual):
-            extracted.append(material)
-            residual = re.sub(pattern, " ", residual)
-
-    residual = re.sub(r"\b(and|or|with|in|of|for|rug|rugs)\b", " ", residual)
-    words = [
-        word for word in residual.split()
-        if word not in MATERIAL_QUALIFIER_WORDS
-    ]
-    residual = re.sub(r"\s+", " ", " ".join(words)).strip()
-
-    return extracted, residual
-
-
-def _parse_amount_with_suffix(amount_text: str, suffix: str = "") -> float:
-    amount = float(amount_text.replace(",", ""))
-    multiplier = AMOUNT_MULTIPLIERS.get((suffix or "").lower(), 1)
-    return amount * multiplier
-
-
-def _is_probable_price_amount(amount: float, suffix: str = "", context: str = "") -> bool:
-    if suffix:
-        return True
-    if amount >= 1000:
-        return True
-    return any(word in context.split() for word in PRICE_CONTEXT_WORDS)
-
-
-def _normalize_currency_code(value: str) -> str:
-    normalized = (value or DEFAULT_CURRENCY).lower().strip()
-    return CURRENCY_ALIASES.get(normalized, normalized.upper())
-
-
-def _format_price_amount(value) -> str:
-    if value is None or value == "":
-        return ""
-    try:
-        amount = float(str(value).replace(",", ""))
-    except (TypeError, ValueError):
-        return str(value).strip()
-
-    if amount.is_integer():
-        return f"{int(amount):,}"
-    return f"{amount:,.2f}".rstrip("0").rstrip(".")
-
-
-def _build_display_price(currency: str, amount) -> str:
-    formatted_amount = _format_price_amount(amount)
-    if not formatted_amount:
-        return ""
-    return f"{currency} {formatted_amount}"
-
-
-def _currency_alias_pattern() -> str:
-    return "|".join(
-        re.escape(alias)
-        for alias in sorted(CURRENCY_ALIASES, key=len, reverse=True)
-    )
-
-
-def _extract_requested_currency_from_text(text: str) -> str:
-    lower = (text or "").lower()
-    alias_pattern = _currency_alias_pattern()
-    patterns = [
-        rf"\bin\s*({alias_pattern})\b",
-        rf"\bin({alias_pattern})\b",
-        rf"\b({alias_pattern})\s*(?:price|prices|pricing|mrp)\b",
-        rf"\b(?:price|prices|pricing|mrp)\s*(?:in\s*)?({alias_pattern})\b",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, lower)
-        if match:
-            currency = _normalize_currency_code(match.group(1))
-            if currency in CURRENCY_FIELDS:
-                return currency
-    return ""
-
-
-def _clean_generic_residual(text: str) -> str:
-    text = re.sub(rf"\bin(?:{_currency_alias_pattern()})\b", " ", text)
-    text = re.sub(r"\b(?:and|or|with|in|of|for|the|a|an)\b", " ", text)
-    words = [word for word in text.split() if word not in GENERIC_NOISE_WORDS]
-    return re.sub(r"\s+", " ", " ".join(words)).strip()
-
-
-def _extract_price_filter_from_text(text: str) -> tuple[dict | None, str]:
-    """Extract one price filter from free text, supporting Indian shorthand."""
-    currencies = r"inr|usd|eur|gbp|aud|chf|sgd|aed"
-    currency_aliases = _currency_alias_pattern()
-    operators = "|".join(
-        re.escape(word)
-        for word in sorted(PRICE_OPERATOR_WORDS, key=len, reverse=True)
-    )
-    amount = r"([\d,]+(?:\.\d+)?)\s*(k|thousand|lacs?|lakhs?|lakh|lc|l|cr|crores?|m|million)?"
-
-    range_match = re.search(
-        rf"\bbetween\s+(?:({currency_aliases})\s*)?{amount}\s+"
-        rf"(?:and|to|-)\s+(?:({currency_aliases})\s*)?{amount}",
-        text,
-    )
-    if range_match:
-        first_currency, min_amount_text, min_suffix, second_currency, max_amount_text, max_suffix = (
-            range_match.groups()
-        )
-        min_amount = _parse_amount_with_suffix(min_amount_text, min_suffix or "")
-        max_amount = _parse_amount_with_suffix(max_amount_text, max_suffix or min_suffix or "")
-        currency = first_currency or second_currency or DEFAULT_CURRENCY
-        price_filter = {
-            "currency": _normalize_currency_code(currency),
-            "min_amount": min(min_amount, max_amount),
-            "max_amount": max(min_amount, max_amount),
-        }
-        residual = f"{text[:range_match.start()]} {text[range_match.end():]}"
-        return price_filter, _clean_generic_residual(residual)
-
-    patterns = [
-        # "under 1000 usd", "below 500 dollars"
-        rf"\b({operators})\b\s*{amount}\s*({currency_aliases})\b",
-        # "above INR 4 lakh", "under usd 1000", "budget 80000"
-        rf"\b({operators})\b\s*(?:({currency_aliases})\s*)?{amount}",
-        # "INR 4 lakh above", "usd 1000 under"
-        rf"\b(?:({currency_aliases})\s*)?{amount}\s*\b({operators})\b",
-        # Existing compact form: "INR 80000", "rs 50000", "50000 rupees".
-        rf"\b({currency_aliases})\s+{amount}\b",
-        rf"\b{amount}\s*({currency_aliases})\b",
-        # Plain amount with context or a large enough value: "show rugs 100000", "4 lakh".
-        rf"\b{amount}\b",
-    ]
-
-    for index, pattern in enumerate(patterns):
-        match = re.search(pattern, text)
-        if not match:
-            continue
-
-        groups = match.groups()
-        if index == 0:
-            operator_word, amount_text, suffix, currency = groups
-        elif index == 1:
-            operator_word, currency, amount_text, suffix = groups
-        elif index == 2:
-            currency, amount_text, suffix, operator_word = groups
-        elif index == 3:
-            currency, amount_text, suffix = groups
-            operator_word = "budget"
-        elif index == 4:
-            amount_text, suffix, currency = groups
-            operator_word = "budget"
-        else:
-            amount_text, suffix = groups
-            currency = DEFAULT_CURRENCY
-            operator_word = "budget"
-
-        parsed_amount = _parse_amount_with_suffix(amount_text, suffix or "")
-        if not currency and not _is_probable_price_amount(
-            parsed_amount,
-            suffix or "",
-            f"{text[:match.start()]} {text[match.end():]}",
-        ):
-            continue
-
-        price_filter = {
-            "currency": _normalize_currency_code(currency or DEFAULT_CURRENCY),
-            "amount": parsed_amount,
-            "operator": PRICE_OPERATOR_WORDS.get(operator_word, "$lte"),
-        }
-        residual = f"{text[:match.start()]} {text[match.end():]}"
-        return price_filter, _clean_generic_residual(residual)
-
-    return None, _clean_generic_residual(text)
 
 
 def _normalize_sku(value) -> str:
@@ -563,14 +298,13 @@ def _highest_matched_color(color_map: dict, requested_colors: list[str]) -> tupl
 def _parse_keyword_filters(keyword: str):
     """
     Parse a &-separated keyword string into structured filters.
-    Returns: colors, materials, constructions, styles, shapes, sizes, price_filter, weight_filter, generics
+    Returns: colors, materials, constructions, styles, sizes, price_filter, weight_filter, generics
     """
     parts = [p.strip() for p in keyword.split("&")]
     colors = []
     materials = []
     constructions = []
     styles = []
-    shapes = []
     sizes = []
     price_filter = None
     weight_filter = None
@@ -590,20 +324,16 @@ def _parse_keyword_filters(keyword: str):
             if not lower:
                 continue
 
-        # Price: "INR 30000", "above 4lc", "under INR 2 lakh".
-        parsed_price_filter, lower = _extract_price_filter_from_text(lower)
-        if parsed_price_filter:
-            price_filter = parsed_price_filter
-            if not lower:
-                continue
-
-        # Material phrases inside free text: "100% cotton rugs", "pure wool rugs".
-        found_materials, residual_text = _extract_materials_from_text(lower)
-        if found_materials:
-            materials.extend(found_materials)
-            lower = residual_text
-            if not lower:
-                continue
+        # Price: "INR 30000"
+        price_match = re.match(
+            r'^(inr|usd|eur|gbp|aud|chf|sgd|aed)\s+([\d,]+(?:\.\d+)?)$', lower
+        )
+        if price_match:
+            price_filter = {
+                "currency": price_match.group(1).upper(),
+                "amount": float(price_match.group(2).replace(",", "")),
+            }
+            continue
 
         # Weight ceiling: "weight 8", "8kg", "weight 8kg"
         weight_match = re.match(r'^(?:weight\s*)?([\d.]+)\s*kg?$', lower)
@@ -626,11 +356,6 @@ def _parse_keyword_filters(keyword: str):
             constructions.append(lower)
             continue
 
-        # Shape
-        if lower in KNOWN_SHAPES:
-            shapes.append("round" if lower in {"circle", "circular"} else lower)
-            continue
-
         # Material
         if lower in KNOWN_MATERIALS:
             materials.append(lower)
@@ -642,18 +367,12 @@ def _parse_keyword_filters(keyword: str):
             continue
 
         # Everything else → generic text match
-        generic = _clean_generic_residual(lower)
-        if generic:
-            generics.append(generic)
+        generics.append(lower)
 
     # Deduplicate while preserving order so fallback logic sees accurate color count.
     colors = list(dict.fromkeys(colors))
-    materials = list(dict.fromkeys(materials))
-    constructions = list(dict.fromkeys(constructions))
-    styles = list(dict.fromkeys(styles))
-    shapes = list(dict.fromkeys(shapes))
 
-    return colors, materials, constructions, styles, shapes, sizes, price_filter, weight_filter, generics
+    return colors, materials, constructions, styles, sizes, price_filter, weight_filter, generics
 
 
 def _build_mongo_query(
@@ -665,7 +384,6 @@ def _build_mongo_query(
     materials: list,
     constructions: list,
     styles: list,
-    shapes: list,
     price_filter: dict | None,
     generics: list,
     sku_filter: list[str] | None = None,
@@ -694,25 +412,13 @@ def _build_mongo_query(
         regex = "|".join(re.escape(s) for s in styles)
         query["search.style"] = {"$regex": regex, "$options": "i"}
 
-    if shapes:
-        regex = "|".join(re.escape(s) for s in shapes)
-        query["search.shape"] = {"$regex": regex, "$options": "i"}
-
     if price_filter:
-        comparison = {"$gt": 0}
-        if "min_amount" in price_filter:
-            comparison["$gte"] = price_filter["min_amount"]
-        if "max_amount" in price_filter:
-            comparison["$lte"] = price_filter["max_amount"]
-        if "amount" in price_filter:
-            operator = price_filter.get("operator") or "$lte"
-            comparison[operator] = price_filter["amount"]
         if price_filter["currency"] == "INR":
-            query["search.price"] = comparison
+            query["search.price"] = {"$gt": 0, "$lte": price_filter["amount"]}
         else:
             field = CURRENCY_FIELDS.get(price_filter["currency"])
             if field:
-                query[f"raw.{field}"] = comparison
+                query[f"raw.{field}"] = {"$gt": 0, "$lte": price_filter["amount"]}
 
     if sku_filter:
         and_clauses.append(
@@ -779,157 +485,11 @@ async def _resolve_currency_from_ip(ip: str) -> str:
     return DEFAULT_CURRENCY
 
 
-def _resolve_currency_from_country_code(country_code: str) -> str:
-    digits = re.sub(r"\D", "", country_code or "")
-    for length in range(min(3, len(digits)), 0, -1):
-        currency = CALLING_CODE_TO_CURRENCY.get(digits[:length])
-        if currency:
-            return currency
-    return ""
-
-
-def _first_valid_image(raw: dict) -> str:
-    for key in ("HeadShot", "Corner", "CloseUp", "Floorshot"):
-        value = (raw.get(key) or "").strip()
-        if value and not value.endswith("/"):
-            return value
-    return ""
-
-
-def _api_product_sku(product: dict) -> str:
-    for key in ("SKU", "BarCode"):
-        value = product.get(key)
-        if value:
-            return str(value).strip().upper()
-    return ""
-
-
-def _format_raw_api_products(
-    products: list[dict],
-    currency: str,
-    requested_colors: list[str],
-    max_items: int = 3,
-) -> list[dict]:
-    if isinstance(products, dict):
-        products = (
-            products.get("data")
-            or products.get("products")
-            or products.get("result")
-            or products.get("items")
-            or []
-        )
-    if not isinstance(products, list):
-        return []
-
-    currency_field = CURRENCY_FIELDS.get(currency, "INR_MRP")
-    formatted = []
-    for raw in products:
-        if not isinstance(raw, dict):
-            continue
-        sku = _api_product_sku(raw)
-        color_text = " ".join(
-            str(raw.get(key) or "")
-            for key in ("GrColor", "ColorFamily")
-        ).lower()
-        matched_colors = {
-            color: 100
-            for color in requested_colors
-            if color and _color_text_has_requested(color_text, color)
-        }
-        price_amount = raw.get(currency_field)
-        slug = raw.get("ProductURL") or ""
-        barcode = raw.get("BarCode") or sku
-        formatted.append({
-            "url": (
-                f"https://www.jaipurrugs.com/in/rugs/{slug}?barcode={barcode}"
-                if slug
-                else ""
-            ),
-            "price": {"currency": currency, "amount": price_amount},
-            "display_currency": currency,
-            "display_price": _build_display_price(currency, price_amount),
-            "price_source_field": currency_field,
-            "name": raw.get("Name", ""),
-            "SKU": sku,
-            "collection": raw.get("Collection", ""),
-            "size": raw.get("SizeInFT", ""),
-            "shape": raw.get("Shape", ""),
-            "color": raw.get("GrColor", ""),
-            "color_family": raw.get("ColorFamily", ""),
-            "matched_color_percentage": {
-                "total": 100 if matched_colors else 0,
-                "by_color": matched_colors,
-                "highest": {
-                    "color": next(iter(matched_colors), ""),
-                    "percentage": 100 if matched_colors else 0,
-                },
-            },
-            "fabric": raw.get("MaterialDetails") or raw.get("Material") or "",
-            "construction": raw.get("Construction", ""),
-            "style": raw.get("Style", ""),
-            "description": raw.get("FullDescription") or raw.get("ShortDescription") or "",
-            "image": _first_valid_image(raw),
-            "weight": raw.get("Weight", ""),
-            "quality": raw.get("Quality", ""),
-            "mrp": {
-                "INR": raw.get("INR_MRP"),
-                "USD": raw.get("USD_MRP"),
-                "EUR": raw.get("EUR_MRP"),
-                "GBP": raw.get("GBP_MRP"),
-                "AUD": raw.get("AUD_MRP"),
-                "CHF": raw.get("CHF_MRP"),
-                "SGD": raw.get("SGD_MRP"),
-                "AED": raw.get("AED_MRP"),
-            },
-        })
-        if len(formatted) >= max_items:
-            break
-    return formatted
-
-
-async def jaipur_rugs_product_search(
-    keyword: str,
-    client_ip: str = "",
-    country_code: str = "",
-    requested_currency: str = "",
-    currency: str = "",
-):
+async def jaipur_rugs_product_search(keyword: str, client_ip: str = "", country_code: str = "", currency: str = ""):  # country_code kept for caller compatibility
     """Search products from MongoDB with progressive field fallback."""
     try:
-        requested_currency = requested_currency or currency
-        requested_currency = (
-            _normalize_currency_code(requested_currency)
-            if requested_currency
-            else _extract_requested_currency_from_text(keyword)
-        )
-        colors, materials, constructions, styles, shapes, sizes, price_filter, weight_filter, generics = _parse_keyword_filters(keyword)
-        logger.info(f"Parsed filters — colors: {colors}, materials: {materials}, constructions: {constructions}, styles: {styles}, shapes: {shapes}, sizes: {sizes}, weight: {weight_filter}, price: {price_filter}")
-
-        currency = requested_currency or (price_filter or {}).get("currency") or ""
-        if not currency:
-            currency = _resolve_currency_from_country_code(country_code)
-        if not currency:
-            currency = await _resolve_currency_from_ip(client_ip)
-        currency = _normalize_currency_code(currency)
-
-        try:
-            api_products = await _jr_search_products(keyword)
-            api_formatted = _format_raw_api_products(
-                api_products,
-                currency=currency,
-                requested_colors=colors,
-                max_items=3,
-            )
-            if api_formatted:
-                logger.info(
-                    f"Returning {len(api_formatted)} products from JR product-master-search for keyword: {keyword}"
-                )
-                return api_formatted
-        except Exception as api_error:
-            logger.warning(
-                "JR API product search failed; falling back to Mongo product search",
-                extra={"error": str(api_error), "keyword": keyword},
-            )
+        colors, materials, constructions, styles, sizes, price_filter, weight_filter, generics = _parse_keyword_filters(keyword)
+        logger.info(f"Parsed filters — colors: {colors}, materials: {materials}, sizes: {sizes}, weight: {weight_filter}, price: {price_filter}")
 
         color_sku_filter: list[str] = []
         color_sku_scores: dict = {}
@@ -978,7 +538,7 @@ async def jaipur_rugs_product_search(
                         c_field, query_colors,
                         s_field, sizes,
                         m_field, materials,
-                        constructions, styles, shapes,
+                        constructions, styles,
                         price_filter, generics,
                         color_sku_filter,
                     )
@@ -998,7 +558,7 @@ async def jaipur_rugs_product_search(
                 None, query_colors,
                 None, sizes,
                 None, materials,
-                constructions, [], shapes,
+                constructions, [],
                 price_filter, generics + style_generics,
                 color_sku_filter,
             )
@@ -1008,12 +568,12 @@ async def jaipur_rugs_product_search(
 
         # Fallback: price / weight only (drop keyword filters)
         if not results and (price_filter or weight_filter):
-            query = _build_mongo_query(None, [], None, [], None, [], [], [], [], price_filter, [], color_sku_filter)
+            query = _build_mongo_query(None, [], None, [], None, [], [], [], price_filter, [], color_sku_filter)
             results = _run_query(query)
 
         # Final fallback: any in-stock product — ONLY when no specific filters were given
         # (never return random products when the user asked for something specific)
-        has_specific_filter = any([colors, styles, shapes, materials, constructions, sizes, generics])
+        has_specific_filter = any([colors, styles, materials, constructions, sizes, generics])
         if not results and not has_specific_filter:
             results = _run_query({"flags.inStock": True})
 
@@ -1024,6 +584,10 @@ async def jaipur_rugs_product_search(
         if weight_filter is not None:
             results = _apply_weight_filter(results, weight_filter)
 
+        if currency and currency in CURRENCY_FIELDS:
+            pass  # caller already resolved a supported currency
+        else:
+            currency = await _resolve_currency_from_ip(client_ip)
         currency_field = CURRENCY_FIELDS.get(currency, "INR_MRP")
 
         if color_sku_scores:
@@ -1057,14 +621,13 @@ async def jaipur_rugs_product_search(
                 color_score.get("colors", {}),
                 colors,
             )
-            price_amount = raw.get(currency_field)
-            display_price = _build_display_price(currency, price_amount)
+            product_slug = raw.get("ProductURL") or ""
             formatted.append({
-                "url": f"https://www.jaipurrugs.com/in/rugs/{raw.get('ProductURL')}?barcode={p.get('BarCode')}",
-                "price": {"currency": currency, "amount": price_amount},
-                "display_currency": currency,
-                "display_price": display_price,
-                "price_source_field": currency_field,
+                "url": (
+                    f"https://www.jaipurrugs.com/in/rugs/{product_slug}?barcode={p.get('BarCode')}"
+                    if product_slug else ""
+                ),
+                "price": {"currency": currency, "amount": raw.get(currency_field)},
                 "name": raw.get("Name", ""),
                 "SKU": sku,
                 "collection": raw.get("Collection", ""),
@@ -1087,7 +650,7 @@ async def jaipur_rugs_product_search(
                 "quality": search.get("quality", ""),
                 "room": search.get("room", []),
                 "weight": search.get("weight", 0.0),
-                "image": _first_valid_image(raw),
+                "image": raw.get("HeadShot", ""),
                 "mrp": {
                     "INR": raw.get("INR_MRP"),
                     "USD": raw.get("USD_MRP"),

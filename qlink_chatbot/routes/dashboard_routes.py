@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from datetime import datetime
 
 from bson import ObjectId
@@ -15,15 +14,9 @@ from qlink_chatbot.agent.utils.chat_agent_prompts import (
 )
 from qlink_chatbot.database.mongo_utils import (
     internal_collection,
-    mark_handoff_attended,
     sessions_collection,
     toggle_ai,
     whatsapp_sessions_collection,
-)
-from qlink_chatbot.utils.agent_availability import (
-    OFFLINE_MESSAGE,
-    get_agent_status,
-    set_agent_manual_status,
 )
 from qlink_chatbot.utils.jr_api_client import get_all_products as _jr_get_all_products
 from qlink_chatbot.utils.env_load import qlink_gupshup_source
@@ -34,9 +27,6 @@ dashboard_router = APIRouter(prefix="/api")
 
 manual_products_collection = whatsapp_sessions_collection.database["dashboard_products"]
 catalog_designs_collection = whatsapp_sessions_collection.database["catalog_designs"]
-AGENT_TAKEOVER_MESSAGE = (
-    "Our rug specialist will connect soon as per availability. We request your patience."
-)
 
 
 def _jsonable(value):
@@ -64,24 +54,6 @@ def _message_type(content: str) -> str:
     if lower.startswith("[template]"):
         return "template"
     return "text"
-
-
-def _normalize_whatsapp_phone(phone: str) -> str:
-    value = (phone or "").strip().lower()
-    digits = re.sub(r"\D", "", value)
-    return digits if len(digits) >= 10 else value
-
-
-def _find_whatsapp_session(phone: str):
-    normalized_phone = _normalize_whatsapp_phone(phone)
-    session = whatsapp_sessions_collection.find_one({"session_id": normalized_phone})
-    if session:
-        return normalized_phone, session
-
-    raw_phone = (phone or "").strip().lower()
-    if raw_phone != normalized_phone:
-        session = whatsapp_sessions_collection.find_one({"session_id": raw_phone})
-    return normalized_phone, session
 
 
 def _session_to_conversation(session: dict) -> dict:
@@ -236,10 +208,10 @@ def get_conversations():
 
 @dashboard_router.get("/conversations/{phone}")
 def get_conversation(phone: str):
-    normalized_phone, session = _find_whatsapp_session(phone)
+    session = whatsapp_sessions_collection.find_one({"session_id": phone.lower()})
     if not session:
-        return {"phone": normalized_phone, "messages": []}
-    return {"phone": normalized_phone, "messages": _history_to_messages(session.get("chat_history", []))}
+        return {"phone": phone, "messages": []}
+    return {"phone": phone, "messages": _history_to_messages(session.get("chat_history", []))}
 
 
 @dashboard_router.get("/leads")
@@ -264,7 +236,7 @@ def get_leads():
 
 @dashboard_router.post("/whatsapp/send")
 def send_whatsapp_message(payload: dict = Body(...)):
-    phone = _normalize_whatsapp_phone(payload.get("phone") or "")
+    phone = (payload.get("phone") or "").strip()
     message = (payload.get("message") or "").strip()
     if not phone or not message:
         raise HTTPException(status_code=400, detail="phone and message are required")
@@ -291,53 +263,6 @@ def send_whatsapp_message(payload: dict = Body(...)):
         upsert=True,
     )
     return {"success": True}
-
-
-@dashboard_router.get("/agent-status")
-def read_agent_status():
-    return get_agent_status()
-
-
-@dashboard_router.post("/agent-status")
-def update_agent_status(payload: dict = Body(...)):
-    try:
-        return set_agent_manual_status((payload.get("manual_status") or "").strip())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@dashboard_router.post("/conversations/{phone}/takeover")
-def takeover_conversation(phone: str):
-    """Switch a WhatsApp conversation to human-agent mode and notify the customer."""
-    normalized_phone, session = _find_whatsapp_session(phone)
-    if not normalized_phone:
-        raise HTTPException(status_code=400, detail="phone is required")
-
-    if not session:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    now = datetime.utcnow()
-    status = get_agent_status()
-    message = AGENT_TAKEOVER_MESSAGE if status["is_accepting_chats"] else OFFLINE_MESSAGE
-    whatsapp_sessions_collection.update_one(
-        {"session_id": normalized_phone},
-        {
-            "$set": {"is_ai": False, "updated_at": now},
-            "$push": {
-                "chat_history": {
-                    "role": "assistant",
-                    "content": message,
-                    "timestamp": now,
-                }
-            },
-        },
-    )
-    dispatch_whatsapp_responses(
-        phone_number=normalized_phone,
-        bot_responses=[{"type": "text", "text": message}],
-    )
-    mark_handoff_attended(normalized_phone)
-    return {"phone": normalized_phone, "is_ai": False, "message": message}
 
 
 @dashboard_router.get("/prompt")
@@ -698,14 +623,13 @@ def debug_price_fields(limit: int = 5):
 @dashboard_router.post("/conversations/{phone}/toggle-ai")
 def toggle_conversation_ai(phone: str):
     """Toggle AI on/off for a WhatsApp conversation (human-agent handoff)."""
-    normalized_phone = _normalize_whatsapp_phone(phone)
     new_status = toggle_ai(
-        session_id=normalized_phone,
+        session_id=phone.strip().lower(),
         collection_name="users_whatsapp",
     )
     if new_status is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return {"phone": normalized_phone, "is_ai": new_status}
+    return {"phone": phone, "is_ai": new_status}
 
 
 _CRON_SECRET = os.getenv("CRON_SECRET", "")

@@ -172,10 +172,6 @@ def format_recent_products_for_ai(previous_searches, max_products: int = 3) -> s
 
     return json.dumps(compact_products)
 
-def _known_callback_number(session_id: str) -> str:
-    digits = "".join(ch for ch in str(session_id or "") if ch.isdigit())
-    return digits if len(digits) >= 10 else ""
-
 def agent_alert_tool(alert, sesson_id):
     """Tool function to raise an agent alert"""
     try:
@@ -222,7 +218,6 @@ async def chat_agent(
             {"role": "developer", "content": f"Chat history:\n{format_recent_chat_for_ai(chat_history)}"},
             {"role": "developer", "content": f"Current date and time: {_ist_time_str}"},
             {"role": "developer", "content": f"users country code: {country_code}"},
-            {"role": "developer", "content": f"Known callback phone number from session: {_known_callback_number(session_id) or 'not recorded'}"},
             {"role": "developer", "content": f"User's detected local currency: {detected_currency or 'INR'}. Show product prices in this currency by default unless the user explicitly asks for a different one."},
             {
                 "role": "developer",
