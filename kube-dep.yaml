@@ -20,12 +20,49 @@ spec:
       labels:
         app: qlink-chatbot
     spec:
+      automountServiceAccountToken: false
+      hostPID: false
+      hostIPC: false
+      hostNetwork: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: qlink-chatbot
           image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 8000
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          volumeMounts:
+            - name: app-logs
+              mountPath: /app/logs
+            - name: tmp
+              mountPath: /tmp
           env:
             - name: ENV_MODE
               value: "${ENV_MODE}"
@@ -34,19 +71,40 @@ spec:
             - name: PYTHONDONTWRITEBYTECODE
               value: "${PYTHONDONTWRITEBYTECODE}"
             - name: OPENAI_API_KEY
-              value: "${OPENAI_API_KEY}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: OPENAI_API_KEY
             - name: MONGO_URI
-              value: "${MONGO_URI}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: MONGO_URI
             - name: GUPSHUP_APP_ID
-              value: "${GUPSHUP_APP_ID}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: GUPSHUP_APP_ID
             - name: GUPSHUP_TOKEN
-              value: "${GUPSHUP_TOKEN}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: GUPSHUP_TOKEN
             - name: GUPSHUP_APP_NAME
-              value: "${GUPSHUP_APP_NAME}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: GUPSHUP_APP_NAME
             - name: GUPSHUP_API_KEY
-              value: "${GUPSHUP_API_KEY}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: GUPSHUP_API_KEY
             - name: CALLCHIMP_API_KEY
-              value: "${CALLCHIMP_API_KEY}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: CALLCHIMP_API_KEY
           resources:
             requests:
               memory: "1000Mi"
@@ -54,6 +112,11 @@ spec:
             limits:
               memory: "3000Mi"
               cpu: "700m"
+      volumes:
+        - name: app-logs
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -70,3 +133,23 @@ spec:
     protocol: TCP
   selector:
     app: qlink-chatbot
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: qlink-chatbot-default-deny
+  namespace: ${DEPLOY_NAMESPACE}
+spec:
+  podSelector:
+    matchLabels:
+      app: qlink-chatbot
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - {}
