@@ -18,36 +18,36 @@ jobs:
       - name: Verify Dockerfile Exists
         run: |
           if [ ! -f Dockerfile ]; then
-            echo "❌ Dockerfile not found" >> $GITHUB_STEP_SUMMARY
+            echo "Dockerfile not found" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
 
-      - name: Check JR API Client — no hardcoded credential fallbacks
+      - name: Check JR API Client - no hardcoded credential fallbacks
         id: check_jr_api
         continue-on-error: true
         run: |
           FILE="qlink_chatbot/utils/jr_api_client.py"
 
           if [ ! -f "$FILE" ]; then
-            echo "❌ $FILE not found" | tee -a $GITHUB_STEP_SUMMARY
+            echo "$FILE not found" | tee -a $GITHUB_STEP_SUMMARY
             exit 1
           fi
 
           # Fail if os.getenv is used with a non-empty default for any JR_API_ key
           if grep -En 'os\.getenv\("JR_API_(USERNAME|PASSWORD|CLIENT_ID|CLIENT_SECRET)",\s*"[^"]' "$FILE"; then
-            echo "❌ Hardcoded credential fallback detected in $FILE — use os.environ[KEY] instead of os.getenv(KEY, value)" | tee -a $GITHUB_STEP_SUMMARY
+            echo "Hardcoded credential fallback detected in $FILE - use os.environ[KEY] instead of os.getenv(KEY, value)" | tee -a $GITHUB_STEP_SUMMARY
             exit 1
           fi
 
           # Fail if the four credential keys are not read via os.environ[
           for KEY in JR_API_USERNAME JR_API_PASSWORD JR_API_CLIENT_ID JR_API_CLIENT_SECRET; do
             if ! grep -qF "os.environ[\"${KEY}\"]" "$FILE"; then
-              echo "❌ ${KEY} is not loaded via os.environ in $FILE" | tee -a $GITHUB_STEP_SUMMARY
+              echo "${KEY} is not loaded via os.environ in $FILE" | tee -a $GITHUB_STEP_SUMMARY
               exit 1
             fi
           done
 
-          echo "✅ $FILE: all JR API credentials loaded securely via os.environ" | tee -a $GITHUB_STEP_SUMMARY
+          echo "$FILE: all JR API credentials loaded securely via os.environ" | tee -a $GITHUB_STEP_SUMMARY
 
       - name: Install Trivy and jq
         run: |
@@ -231,8 +231,8 @@ jobs:
           fi
 
           if [ "$FAILED" -eq 1 ]; then
-            echo "❌ SECURITY GATE FAILED"
+            echo "SECURITY GATE FAILED"
             exit 1
           fi
 
-          echo "✅ ALL SECURITY CHECKS PASSED"
+          echo "ALL SECURITY CHECKS PASSED"
