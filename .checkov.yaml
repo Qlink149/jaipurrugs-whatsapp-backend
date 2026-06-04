@@ -1,2 +1,3 @@
 skip-checks:
   - CKV_K8S_43  # Image digest pinning: image tag is set dynamically by CI/CD; SHA digest pinning not compatible with this pipeline
+  - CKV_K8S_35  # Runtime reads configuration from environment variables; sensitive values are supplied via Kubernetes secretKeyRef

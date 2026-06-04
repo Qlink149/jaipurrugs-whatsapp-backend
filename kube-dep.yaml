@@ -70,19 +70,37 @@ spec:
             - name: PYTHONDONTWRITEBYTECODE
               value: "${PYTHONDONTWRITEBYTECODE}"
             - name: OPENAI_API_KEY
-              value: "${OPENAI_API_KEY}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: OPENAI_API_KEY
             - name: MONGO_URI
-              value: "${MONGO_URI}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: MONGO_URI
             - name: GUPSHUP_APP_ID
-              value: "${GUPSHUP_APP_ID}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: GUPSHUP_APP_ID
             - name: GUPSHUP_TOKEN
-              value: "${GUPSHUP_TOKEN}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: GUPSHUP_TOKEN
             - name: GUPSHUP_APP_NAME
               value: "${GUPSHUP_APP_NAME}"
             - name: GUPSHUP_API_KEY
-              value: "${GUPSHUP_API_KEY}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: GUPSHUP_API_KEY
             - name: CALLCHIMP_API_KEY
-              value: "${CALLCHIMP_API_KEY}"
+              valueFrom:
+                secretKeyRef:
+                  name: qlink-chatbot-secrets
+                  key: CALLCHIMP_API_KEY
           resources:
             requests:
               memory: "1000Mi"

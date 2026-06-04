@@ -201,26 +201,32 @@ jobs:
           FAILED=0
 
           if [ "${{ steps.check_jr_api.outcome }}" = "failure" ]; then
+            echo "Failed: JR API Client Check"
             FAILED=1
           fi
 
           if [ "${{ steps.semgrep.outcome }}" = "failure" ]; then
+            echo "Failed: Semgrep"
             FAILED=1
           fi
 
           if [ "${{ steps.gitleaks.outcome }}" = "failure" ]; then
+            echo "Failed: Gitleaks"
             FAILED=1
           fi
 
           if [ "${{ steps.trivy_fs.outcome }}" = "failure" ]; then
+            echo "Failed: Trivy Filesystem"
             FAILED=1
           fi
 
           if [ "${{ steps.trivy_image.outcome }}" = "failure" ]; then
+            echo "Failed: Trivy Image"
             FAILED=1
           fi
 
           if [ "${{ steps.checkov.outcome }}" = "failure" ]; then
+            echo "Failed: Checkov"
             FAILED=1
           fi
 
