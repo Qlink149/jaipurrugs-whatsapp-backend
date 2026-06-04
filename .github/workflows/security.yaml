@@ -132,6 +132,7 @@ jobs:
 
       - name: Generate Security Summary
         if: always()
+        continue-on-error: true
         run: |
           echo "# Security Scan Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -146,12 +147,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ -f checkov-report.json ]; then
-            FAILED_CHECKOV=$(jq '[.results.failed_checks[]?] | length' checkov-report.json)
+            # Checkov outputs an array [{results:{failed_checks:[]}}, ...] when scanning multiple types
+            FAILED_CHECKOV=$(jq 'if type == "array" then [.[].results.failed_checks[]?] else [.results.failed_checks[]?] end | length' checkov-report.json)
             echo "## Checkov" >> $GITHUB_STEP_SUMMARY
             echo "- Failed checks: $FAILED_CHECKOV" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             jq -r '
-            .results.failed_checks[]? |
+            (if type == "array" then .[].results else .results end).failed_checks[]? |
             "### " + (.check_id // "") + "\n" +
             "- File: " + (.file_path // "") + "\n" +
             "- Resource: " + (.resource // "") + "\n" +
