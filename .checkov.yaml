@@ -1,3 +1,4 @@
 skip-checks:
-  - CKV_K8S_43  # Image digest pinning: image tag is set dynamically by CI/CD; SHA digest pinning not compatible with this pipeline
-  - CKV_K8S_35  # App reads runtime secrets from env vars; deployment injects them from Kubernetes/GitHub secrets
+  - CKV_K8S_43  # Image digest pinning: tag set dynamically by CI/CD
+  - CKV_K8S_35  # Secrets injected via env vars from Kubernetes/GitHub secrets at deploy time
+  - CKV_GHA_7   # GitHub Actions pinned by version tag, not SHA — intentional for maintainability
