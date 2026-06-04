@@ -8,10 +8,10 @@ from qlink_chatbot.utils.logger_config import logger
 _BASE = "https://webapi.jaipurrugs.com/api"
 
 _CREDS = {
-    "username": os.getenv("JR_API_USERNAME", "erp@pixxeldigital.com"),
-    "password": os.getenv("JR_API_PASSWORD", "Erp@jaipur#3456"),
-    "client_id": os.getenv("JR_API_CLIENT_ID", "276B70EA-BE31-4440-BC16-28FE7220AB4B"),
-    "client_secret": os.getenv("JR_API_CLIENT_SECRET", "573C919E-BD7F-49AB-90EA-0B43291EAAB9"),
+    "username": os.environ["JR_API_USERNAME"],
+    "password": os.environ["JR_API_PASSWORD"],
+    "client_id": os.environ["JR_API_CLIENT_ID"],
+    "client_secret": os.environ["JR_API_CLIENT_SECRET"],
     "grant_type": "password",
 }
 

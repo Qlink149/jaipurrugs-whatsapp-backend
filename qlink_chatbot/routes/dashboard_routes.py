@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from bson import ObjectId
 from fastapi import APIRouter, Body, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from pymongo import UpdateOne
 
 from qlink_chatbot.agent.utils.chat_agent_prompts import (
     system_conversation_style,
@@ -34,6 +35,7 @@ dashboard_router = APIRouter(prefix="/api")
 
 manual_products_collection = whatsapp_sessions_collection.database["dashboard_products"]
 catalog_designs_collection = whatsapp_sessions_collection.database["catalog_designs"]
+BULK_PRODUCT_SYNC_BATCH_SIZE = 500
 AGENT_TAKEOVER_MESSAGE = (
     "Our rug specialist will connect soon as per availability. We request your patience."
 )
@@ -672,49 +674,73 @@ def save_catalog_recommendation(design_id: str, payload: dict = Body(...)):
     return {"success": True}
 
 
+def _website_product_sync_doc(product: dict) -> dict | None:
+    barcode = product.get("BarCode")
+    if not barcode:
+        return None
+    return {
+        "raw": product,
+        "BarCode": barcode,
+        "SKU": product.get("SKU"),
+        "flags": {
+            "inStock": bool(product.get("LiveStatus")) and bool(product.get("Published")),
+        },
+        "search": {
+            "color": {"single": product.get("GrColor", ""), "multi": product.get("ColorFamily", "")},
+            "material": {
+                "primary": product.get("Material", ""),
+                "family": product.get("MaterialFamilies", ""),
+                "details": product.get("MaterialDetails", ""),
+            },
+            "size": {"exact": product.get("SizeInFT", ""), "group": product.get("SizeGroupInFT", "")},
+            "construction": product.get("Construction", ""),
+            "style": product.get("Style", ""),
+            "shape": product.get("Shape", ""),
+            "price": product.get("INR_MRP"),
+            "quality": product.get("Quality", ""),
+            "weight": product.get("Weight", 0.0),
+            "room": [r.strip() for r in (product.get("Room") or "").split(",") if r.strip()],
+        },
+        "updated_at": datetime.utcnow(),
+    }
+
+
+def _bulk_sync_website_products(products: list[dict]) -> dict:
+    synced = 0
+    skipped = 0
+    operations = []
+
+    def flush_operations() -> None:
+        nonlocal operations
+        if operations:
+            website_products_collection.bulk_write(operations, ordered=False)
+            operations = []
+
+    for product in products:
+        doc = _website_product_sync_doc(product)
+        if not doc:
+            skipped += 1
+            continue
+        operations.append(
+            UpdateOne(
+                {"BarCode": doc["BarCode"]},
+                {"$set": doc, "$setOnInsert": {"created_at": datetime.utcnow()}},
+                upsert=True,
+            )
+        )
+        synced += 1
+        if len(operations) >= BULK_PRODUCT_SYNC_BATCH_SIZE:
+            flush_operations()
+
+    flush_operations()
+    return {"synced": synced, "skipped": skipped}
+
+
 @dashboard_router.post("/sync-products")
 async def sync_products():
     """Pull all products from JR Web API and upsert into MongoDB products collection."""
     products = await _jr_get_all_products()
-    synced = 0
-    skipped = 0
-    for p in products:
-        barcode = p.get("BarCode")
-        if not barcode:
-            skipped += 1
-            continue
-        doc = {
-            "raw": p,
-            "BarCode": barcode,
-            "SKU": p.get("SKU"),
-            "flags": {
-                "inStock": bool(p.get("LiveStatus")) and bool(p.get("Published")),
-            },
-            "search": {
-                "color": {"single": p.get("GrColor", ""), "multi": p.get("ColorFamily", "")},
-                "material": {
-                    "primary": p.get("Material", ""),
-                    "family": p.get("MaterialFamilies", ""),
-                    "details": p.get("MaterialDetails", ""),
-                },
-                "size": {"exact": p.get("SizeInFT", ""), "group": p.get("SizeGroupInFT", "")},
-                "construction": p.get("Construction", ""),
-                "style": p.get("Style", ""),
-                "shape": p.get("Shape", ""),
-                "price": p.get("INR_MRP"),
-                "quality": p.get("Quality", ""),
-                "weight": p.get("Weight", 0.0),
-                "room": [r.strip() for r in (p.get("Room") or "").split(",") if r.strip()],
-            },
-            "updated_at": datetime.utcnow(),
-        }
-        website_products_collection.update_one(
-            {"BarCode": barcode},
-            {"$set": doc, "$setOnInsert": {"created_at": datetime.utcnow()}},
-            upsert=True,
-        )
-        synced += 1
-    return {"synced": synced, "skipped": skipped}
+    return _bulk_sync_website_products(products)
 
 
 @dashboard_router.post("/conversations/{phone}/toggle-ai")
@@ -744,45 +770,8 @@ async def cron_sync_products(authorization: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     products = await _jr_get_all_products()
-    synced = 0
-    skipped = 0
-    for p in products:
-        barcode = p.get("BarCode")
-        if not barcode:
-            skipped += 1
-            continue
-        doc = {
-            "raw": p,
-            "BarCode": barcode,
-            "SKU": p.get("SKU"),
-            "flags": {
-                "inStock": bool(p.get("LiveStatus")) and bool(p.get("Published")),
-            },
-            "search": {
-                "color": {"single": p.get("GrColor", ""), "multi": p.get("ColorFamily", "")},
-                "material": {
-                    "primary": p.get("Material", ""),
-                    "family": p.get("MaterialFamilies", ""),
-                    "details": p.get("MaterialDetails", ""),
-                },
-                "size": {"exact": p.get("SizeInFT", ""), "group": p.get("SizeGroupInFT", "")},
-                "construction": p.get("Construction", ""),
-                "style": p.get("Style", ""),
-                "shape": p.get("Shape", ""),
-                "price": p.get("INR_MRP"),
-                "quality": p.get("Quality", ""),
-                "weight": p.get("Weight", 0.0),
-                "room": [r.strip() for r in (p.get("Room") or "").split(",") if r.strip()],
-            },
-            "updated_at": datetime.utcnow(),
-        }
-        website_products_collection.update_one(
-            {"BarCode": barcode},
-            {"$set": doc, "$setOnInsert": {"created_at": datetime.utcnow()}},
-            upsert=True,
-        )
-        synced += 1
-    return {"synced": synced, "skipped": skipped, "triggered_by": "cron"}
+    result = _bulk_sync_website_products(products)
+    return {**result, "triggered_by": "cron"}
 
 
 @dashboard_router.delete("/catalog/designs/{design_id}/recommendation")
