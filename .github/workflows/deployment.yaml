@@ -21,7 +21,7 @@ jobs:
         run: |
           export DOCKER_BUILDKIT=1
           docker build -t jr_web_backend:latest .
-          docker save jr_web_backend:latest -o /tmp/jr_web_backend.tar
+          docker save jr_web_backend:latest -o jr_web_backend.tar
 
       - name: Copy Docker image to VPS
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # master
@@ -29,9 +29,8 @@ jobs:
           host: "65.20.74.206"
           username: root
           password: "3G)jy%N{?oj[m-bA"
-          source: "/tmp/jr_web_backend.tar"
+          source: "jr_web_backend.tar"
           target: "/tmp"
-          strip_components: 1
 
       - name: Deploy to VPS
         uses: appleboy/ssh-action@1530429296e979861824d74fb800013190b5dee0 # master
@@ -41,7 +40,9 @@ jobs:
           password: "3G)jy%N{?oj[m-bA"
           script: |
             set -e
-            docker load -i /tmp/jr_web_backend.tar
+            IMAGE_TAR="$(find /tmp -name jr_web_backend.tar -type f | head -n 1)"
+            test -n "$IMAGE_TAR"
+            docker load -i "$IMAGE_TAR"
             docker stop qlink_web || true
             docker rm qlink_web || true
             docker run -d \
