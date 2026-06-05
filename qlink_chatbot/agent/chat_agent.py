@@ -286,9 +286,10 @@ async def chat_agent(
                     else:
                         # Fallback: LLM used old keyword-only style
                         products = await jaipur_rugs_product_search(kw, client_ip=client_ip, country_code=country_code, currency=resolved_currency)
+                    search_label = kw or str(args.get("colors", args.get("materials", args.get("shapes", "search"))))
                     save_previous_search(
                         session_id,
-                        keyword,
+                        search_label,
                         products,
                         collection_name=collection_name,
                     )
@@ -342,7 +343,25 @@ async def chat_agent(
 
             logger.info("model response", extra={"response": response})
 
-        output = json.loads(response.output[0].content[0].text)
+        # Find the text message output item — don't assume it's always [0]
+        text_content = None
+        for out_item in (response.output or []):
+            try:
+                for content_item in (getattr(out_item, "content", None) or []):
+                    if getattr(content_item, "text", None):
+                        text_content = content_item.text
+                        break
+            except Exception:
+                pass
+            if text_content:
+                break
+
+        if not text_content:
+            logger.error("chat_agent: no text content found in response output",
+                         extra={"response": str(response), "session_id": session_id})
+            return "I'm sorry, I couldn't generate a response. Please try again."
+
+        output = json.loads(text_content)
         return output.get("message")
 
     except Exception as e:
