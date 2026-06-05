@@ -8,7 +8,6 @@ Routing logic:
 Callers (chat agent, REST endpoint) always use SearchFilters + execute().
 They never need to know which data source answered.
 """
-import random
 import re
 from dataclasses import dataclass, field
 
@@ -341,7 +340,7 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
         selected = unique[:filters.limit]
     else:
         unique = _dedupe_by_sku(results)
-        selected = random.sample(unique, min(filters.limit, len(unique)))
+        selected = unique[:filters.limit]
 
     return _format(selected, currency, currency_field, filters.colors, color_sku_scores)
 
