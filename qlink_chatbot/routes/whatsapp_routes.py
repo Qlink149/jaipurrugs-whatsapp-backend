@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, Response
 
 from qlink_chatbot.agent.chat_agent import chat_agent
+from qlink_chatbot.utils.jaipur_rugs_api import currency_from_phone_number
 from qlink_chatbot.database.mongo_utils import (
     create_session,
     get_session_by_id,
@@ -326,7 +327,10 @@ async def _process_message(request_data: dict) -> None:
 
         stop_typing = asyncio.Event()
         typing_task = asyncio.create_task(typing_indicator_loop(message_id, stop_typing))
-        detected_currency = currency_for_country(session.get("country_code", ""))
+        detected_currency = (
+            currency_from_phone_number(phone_number)
+            or currency_for_country(session.get("country_code", ""))
+        )
         try:
             bot_text = await chat_agent(
                 chat_history=session.get("chat_history", []),
