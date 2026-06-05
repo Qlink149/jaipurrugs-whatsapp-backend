@@ -160,6 +160,8 @@ def format_recent_products_for_ai(previous_searches, max_products: int = 3) -> s
     latest_search = previous_searches[-1] if isinstance(previous_searches, list) else {}
     results = latest_search.get("results", []) if isinstance(latest_search, dict) else []
 
+    if not isinstance(results, list):
+        return "[]"
     compact_products = []
     for product in results[:max_products]:
         if not isinstance(product, dict):
@@ -331,6 +333,9 @@ async def chat_agent(
             {"role": "developer", "content": f"users country code: {country_code}"},
             {"role": "developer", "content": f"User's detected local currency: {detected_currency or 'INR'}. Show product prices in this currency by default unless the user explicitly asks for a different one."},
             {"role": "developer", "content": "If the user explicitly asks to see prices in a different currency (e.g. 'show in USD', 'convert to dollars', 'price in AED'), always call `jaipur_rugs_product_search` again with the currency field set to that currency code — even if products were already shown."},
+            {"role": "developer", "content": "When products are returned by `jaipur_rugs_product_search` but a product's price for the requested currency is null or zero: still show ALL returned products. For each product missing that currency price, write 'Price: Not listed in [currency] — INR: ₹[INR_MRP]'. NEVER say 'no products found in [currency]' or 'no rugs listed with [currency] prices' — the products exist, only that currency price may not be listed."},
+            {"role": "developer", "content": "PRICES MUST COME FROM TOOL DATA ONLY. When displaying any price, use the exact numeric value from the tool response's `price.amount` field or the `mrp` object (e.g. mrp.USD, mrp.INR). Never calculate, convert, estimate, round, or invent any price. If a value is missing or zero in the tool data, say it is not listed — do not substitute a calculated equivalent."},
+            {"role": "developer", "content": "When the user asks to show more products, you MUST call `jaipur_rugs_product_search` — never repeat or re-list products already shown. The backend automatically excludes already-shown products from the new results."},
             {
                 "role": "developer",
                 "content": f"user name: {user_name(session_id=session_id, collection_name=collection_name)}",
@@ -347,11 +352,12 @@ async def chat_agent(
 
 
         # Step 1: Model processes with tools available
+        # Low temperature here for consistent, deterministic tool-call decisions
         response = await client.responses.create(
             model="gpt-4.1-mini",
             tools=tools,
             input=input_list,
-            temperature=0.7,
+            temperature=0.2,
             instructions=system_prompt,
             max_output_tokens=2048,
             text=output_schema,
@@ -403,6 +409,7 @@ async def chat_agent(
                             currency=resolved_currency,
                             weight_max=args.get("weight_max"),
                             exclude_keys=exclude_product_keys,
+                            exclude_names=exclude_product_names,
                         )
                         if kw:  # merge any free-text keyword into generics
                             kw_filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
@@ -413,15 +420,16 @@ async def chat_agent(
                         filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
                         filters.exclude_keys = exclude_product_keys
                         products = await _mw_search(filters, client_ip=client_ip)
-                    search_label = product_search_label(args)
-                    save_previous_search(
-                        session_id,
-                        search_label,
-                        products,
-                        collection_name=collection_name,
-                        filters=serialize_search_filters(filters),
-                    )
                     output = json.dumps(products)
+                    if isinstance(products, list) and products:
+                        search_label = product_search_label(args)
+                        save_previous_search(
+                            session_id,
+                            search_label,
+                            products,
+                            collection_name=collection_name,
+                            filters=serialize_search_filters(filters),
+                        )
 
                 elif item.name == "save_user_name":
                     name = args.get("name")
@@ -501,4 +509,4 @@ async def chat_agent(
                 "session_id": session_id
             }
         )
-        raise e
+        return "I'm sorry, I ran into an issue processing your request. Could you please try again?"

@@ -132,7 +132,23 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
                     "button_text": btn_label,
                 }
             else:
-                pending_text.append(_clean_for_whatsapp(block))
+                text = _clean_for_whatsapp(block)
+                text, product_url = _extract_cta(text)
+                if product_url and product_url not in seen_product_urls:
+                    if pending_text:
+                        responses.append({"type": "text", "text": "\n\n".join(pending_text)})
+                        pending_text = []
+                    seen_product_urls.add(product_url)
+                    responses.append({
+                        "type": "interactive_cta",
+                        "button_url": product_url,
+                        "caption": text or "Tap below to view this rug on Jaipur Rugs.",
+                        "button_text": "View Product",
+                    })
+                else:
+                    # Strip any remaining markdown links to plain URLs (WhatsApp doesn't render [text](url))
+                    text = re.sub(r'\[([^\]]+)\]\((https?://[^\)]+)\)', r'\2', text)
+                    pending_text.append(text)
 
     if pending_text:
         responses.append({"type": "text", "text": "\n\n".join(pending_text)})
@@ -345,7 +361,7 @@ async def _process_message(request_data: dict) -> None:
             try:
                 dispatch_whatsapp_responses(
                     phone_number=phone_number,
-                    bot_responses=[{"type": "text", "text": "Unexpected error occurred."}],
+                    bot_responses=[{"type": "text", "text": "Sorry, something went wrong on our end. Please try again in a moment."}],
                 )
             except Exception as send_error:
                 logger.error("Failed to send fallback message",
