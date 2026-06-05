@@ -426,3 +426,97 @@ async def dreamcast_webhook(
             },
             status_code=400,
         )
+
+
+# ── Product Search REST endpoint ──────────────────────────────────────────────
+
+@general_router.post("/search")
+async def product_search(request: Request, payload: dict = Body(...)):
+    """
+    Unified product search endpoint for the frontend.
+
+    Accepts structured filters directly — no keyword packing needed.
+
+    Body (all fields optional):
+    {
+      "keyword":       "hand knotted red",   // free-text, parsed into filters
+      "colors":        ["blue", "ivory"],
+      "shapes":        ["round"],
+      "sizes":         ["8x10"],
+      "materials":     ["wool"],
+      "constructions": ["hand knotted"],
+      "styles":        ["traditional"],
+      "price_max":     1000,
+      "currency":      "USD",
+      "weight_max":    8.0,
+      "limit":         6
+    }
+    """
+    from qlink_chatbot.utils.search_middleware import SearchFilters, search as _search
+
+    try:
+        keyword   = (payload.get("keyword") or "").strip()
+        currency  = (payload.get("currency") or "INR").upper()
+        limit     = min(int(payload.get("limit") or 6), 20)
+        client_ip = request.client.host if request.client else ""
+
+        if keyword:
+            # Free-text path: parse keyword into filters then override with any
+            # explicit params the caller also sent
+            filters = SearchFilters.from_keyword(keyword, currency=currency, limit=limit)
+            if payload.get("colors"):
+                filters.colors = [c.lower() for c in payload["colors"]]
+            if payload.get("shapes"):
+                filters.shapes = [s.lower() for s in payload["shapes"]]
+            if payload.get("sizes"):
+                filters.sizes = payload["sizes"]
+            if payload.get("materials"):
+                filters.materials = [m.lower() for m in payload["materials"]]
+            if payload.get("constructions"):
+                filters.constructions = payload["constructions"]
+            if payload.get("styles"):
+                filters.styles = [s.lower() for s in payload["styles"]]
+            if payload.get("price_max") is not None:
+                filters.price_filter = {"currency": currency, "amount": float(payload["price_max"])}
+            if payload.get("weight_max") is not None:
+                filters.weight_filter = float(payload["weight_max"])
+        else:
+            # Structured path: explicit filter params only
+            filters = SearchFilters.from_params(
+                colors=payload.get("colors"),
+                shapes=payload.get("shapes"),
+                sizes=payload.get("sizes"),
+                materials=payload.get("materials"),
+                constructions=payload.get("constructions"),
+                styles=payload.get("styles"),
+                price_max=payload.get("price_max"),
+                currency=currency,
+                weight_max=payload.get("weight_max"),
+                limit=limit,
+            )
+
+        results = await _search(filters, client_ip=client_ip)
+
+        if isinstance(results, dict) and results.get("error"):
+            return JSONResponse({"products": [], "total": 0, "message": results["error"]}, status_code=200)
+
+        return JSONResponse({
+            "products": results,
+            "total": len(results),
+            "source": "middleware",
+            "filters_used": {
+                "colors": filters.colors,
+                "shapes": filters.shapes,
+                "sizes": filters.sizes,
+                "materials": filters.materials,
+                "constructions": filters.constructions,
+                "styles": filters.styles,
+                "price_filter": filters.price_filter,
+                "weight_filter": filters.weight_filter,
+                "routed_to_mongodb": filters.needs_mongodb(),
+            },
+        }, status_code=200)
+
+    except Exception as e:
+        logger.error(f"Product search endpoint error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
