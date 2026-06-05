@@ -44,6 +44,8 @@ KNOWN_STYLES = {
     "vintage", "rustic", "minimalist",
 }
 
+NON_BLOCKING_DESCRIPTORS = {"solid", "plain"}
+
 KNOWN_SHAPES = {
     "round", "oval", "square", "runner", "rectangular", "hexagonal", "octagonal",
 }
@@ -187,7 +189,11 @@ class SearchFilters:
             sizes=sizes or [],
             materials=[m.lower().strip() for m in (materials or []) if m],
             constructions=constructions or [],
-            styles=styles or [],
+            styles=[
+                s.lower().strip()
+                for s in (styles or [])
+                if s and s.lower().strip() not in NON_BLOCKING_DESCRIPTORS
+            ],
             generics=generics or [],
             price_filter=price_filter,
             weight_filter=weight_max,
