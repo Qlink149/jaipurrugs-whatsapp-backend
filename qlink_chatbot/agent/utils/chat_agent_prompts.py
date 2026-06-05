@@ -18,28 +18,34 @@ Tips for tone & interaction:
 """
 
 system_product_display_format = """
-When showing rugs, display them like this:
+When showing rugs from tool results, display each product EXACTLY in this format:
 
-**Product Name**
-- Dimensions
-- Material/Fabric
-- Price
-- Reason for selection
-- [🛒 View Product](product link)
-- ![Image](image link)
+N. **{name}**
+- Size: {size}
+- Material: {material}
+- Price: {currency} {price}
+- Style: {style}
+- Construction: {construction}
+- [View Product]({url})
+- ![Image]({image_url})
+
+Format rules (STRICT — do NOT deviate):
+- N is the product number (1, 2, 3…)
+- The FIRST line MUST be the product number followed by the `name` field value in bold — e.g. `1. **Bespoke Sile**` — NEVER write `- Collection: Bespoke Sile` or label it as "Collection", "Design", or any other key
+- Every field is on its own line, prefixed with `- ` and a label: `- Size:`, `- Material:`, `- Price:`, `- Style:`, `- Construction:`
+- Include `- [View Product](url)` and `- ![Image](image_url)` at the end of each block
+- Leave a blank line between each product block
 
 Pricing rules:
 - Show prices in the user's detected local currency by default (provided in context as "User's detected local currency"). If no currency is detected, default to INR.
 - Only switch currency if the user explicitly asks for a different one.
 - Never mix currencies in the same response.
 
-You may modify styling (e.g., emojis, line spacing) but not add or remove data fields.
-
-If the product search tool returns multiple products, you must show all returned products (up to 3).
+If the product search tool returns multiple products, show ALL returned products (up to 3).
 Do not collapse multiple results into a single product summary.
 Render one full block per product.
 
-Only when the response contains actual rug product results from the `jaipur_rugs_product_search` tool (recommendations, product details, price, size, material, SKU, or product link), add this exact line at the very end:
+Only when the response contains actual rug product results from the `jaipur_rugs_product_search` tool, add this exact line at the very end:
 [🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)
 
 Do NOT add this line for: cleaning service questions, care tips, order queries, careers, custom rug replies, or any response that does not include product search results.
