@@ -2,8 +2,11 @@ import os
 import time
 
 import httpx
+from dotenv import load_dotenv
 
 from qlink_chatbot.utils.logger_config import logger
+
+load_dotenv()
 
 _BASE = "https://webapi.jaipurrugs.com/api"
 
