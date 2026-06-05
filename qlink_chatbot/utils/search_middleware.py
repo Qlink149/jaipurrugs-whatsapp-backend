@@ -700,13 +700,14 @@ def _format(products: list[dict], currency: str, currency_field: str,
             "SGD": raw.get("SGD_MRP") or p.get("SGD_MRP"),
             "AED": raw.get("AED_MRP") or p.get("AED_MRP"),
         }
+        image_raw = raw.get("HeadShot", "")
+        image_url = image_raw.replace(" ", "%20") if image_raw else ""
         out.append({
             "url": f"https://www.jaipurrugs.com/in/rugs/{slug}?barcode={barcode}" if slug else "",
             "price": {"currency": currency, "amount": raw.get(currency_field) or p.get(currency_field)},
             "name": display_name,
             "SKU": sku,
             "barcode": barcode,
-            "collection": raw.get("Collection", ""),
             "size": size.get("exact", raw.get("SizeInFT", "")),
             "shape": search.get("shape", raw.get("Shape", "")),
             "color": color.get("single", raw.get("GrColor", "")),
@@ -723,7 +724,7 @@ def _format(products: list[dict], currency: str, currency_field: str,
             "quality": search.get("quality", raw.get("Quality", "")),
             "room": search.get("room", [r.strip() for r in (raw.get("Room") or "").split(",") if r.strip()]),
             "weight": search.get("weight", raw.get("Weight", 0.0)),
-            "image": raw.get("HeadShot", ""),
+            "image": image_url,
             "mrp": mrp,
         })
     return out
