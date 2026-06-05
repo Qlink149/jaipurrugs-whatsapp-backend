@@ -17,30 +17,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Login to Vultr Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: sgp.vultrcr.com
-          username: ${{ secrets.VULTR_REGISTRY_USERNAME }}
-          password: ${{ secrets.VULTR_REGISTRY_PASSWORD }}
-
-      - name: Build and push Docker image
-        run: |
-          export DOCKER_BUILDKIT=1
-          REGISTRY_PATH="sgp.vultrcr.com/qlink01/jr_web_backend"
-          docker build -t $REGISTRY_PATH:latest .
-          docker push $REGISTRY_PATH:latest
-
       - name: Deploy to VPS
         uses: appleboy/ssh-action@1530429296e979861824d74fb800013190b5dee0 # master
         with:
           host: "65.20.74.206"
           username: root
           password: "3G)jy%N{?oj[m-bA"
-          envs: VULTR_REGISTRY_USERNAME,VULTR_REGISTRY_PASSWORD
           script: |
-            echo "$VULTR_REGISTRY_PASSWORD" | docker login -u "$VULTR_REGISTRY_USERNAME" --password-stdin sgp.vultrcr.com
-            docker pull sgp.vultrcr.com/qlink01/jr_web_backend:latest
+            set -e
+            APP_DIR=/tmp/jaipurrugs-whatsapp-backend
+            rm -rf "$APP_DIR"
+            git clone --depth 1 --branch main https://github.com/Qlink149/jaipurrugs-whatsapp-backend.git "$APP_DIR"
+            cd "$APP_DIR"
+            export DOCKER_BUILDKIT=1
+            docker build -t jr_web_backend:latest .
             docker stop qlink_web || true
             docker rm qlink_web || true
             docker run -d \
@@ -71,7 +61,7 @@ jobs:
               -e JR_API_CLIENT_ID=${{ secrets.JR_API_CLIENT_ID }} \
               -e JR_API_CLIENT_SECRET=${{ secrets.JR_API_CLIENT_SECRET }} \
               -e CORS_ORIGINS=${{ secrets.CORS_ORIGINS }} \
-              sgp.vultrcr.com/qlink01/jr_web_backend
+              jr_web_backend:latest
 
       - name: Cleanup
         uses: appleboy/ssh-action@1530429296e979861824d74fb800013190b5dee0 # master
