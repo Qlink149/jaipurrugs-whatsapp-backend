@@ -17,6 +17,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Build Docker image
+        run: |
+          export DOCKER_BUILDKIT=1
+          docker build -t jr_web_backend:latest .
+          docker save jr_web_backend:latest -o /tmp/jr_web_backend.tar
+
+      - name: Copy Docker image to VPS
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # master
+        with:
+          host: "65.20.74.206"
+          username: root
+          password: "3G)jy%N{?oj[m-bA"
+          source: "/tmp/jr_web_backend.tar"
+          target: "/tmp"
+          strip_components: 1
+
       - name: Deploy to VPS
         uses: appleboy/ssh-action@1530429296e979861824d74fb800013190b5dee0 # master
         with:
@@ -25,12 +41,7 @@ jobs:
           password: "3G)jy%N{?oj[m-bA"
           script: |
             set -e
-            APP_DIR=/tmp/jaipurrugs-whatsapp-backend
-            rm -rf "$APP_DIR"
-            git clone --depth 1 --branch main https://github.com/Qlink149/jaipurrugs-whatsapp-backend.git "$APP_DIR"
-            cd "$APP_DIR"
-            export DOCKER_BUILDKIT=1
-            docker build -t jr_web_backend:latest .
+            docker load -i /tmp/jr_web_backend.tar
             docker stop qlink_web || true
             docker rm qlink_web || true
             docker run -d \
