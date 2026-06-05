@@ -2,8 +2,11 @@ import os
 import time
 
 import httpx
+from dotenv import load_dotenv
 
 from qlink_chatbot.utils.logger_config import logger
+
+load_dotenv()
 
 _BASE = "https://webapi.jaipurrugs.com/api"
 
@@ -23,15 +26,15 @@ async def _get_token(force_refresh: bool = False) -> str:
     if not force_refresh and _token_cache["token"] and now < _token_cache["expires_at"]:
         return _token_cache["token"]
 
-    missing = [key for key in _CRED_ENV_KEYS if not os.getenv(key)]
+    missing = [key for key in _CRED_ENV_KEYS if not os.environ.get(key)]
     if missing:
         raise RuntimeError(f"JR API credentials are not configured: {', '.join(missing)}")
 
     creds = {
-        "username": os.getenv("JR_API_USERNAME"),
-        "password": os.getenv("JR_API_PASSWORD"),
-        "client_id": os.getenv("JR_API_CLIENT_ID"),
-        "client_secret": os.getenv("JR_API_CLIENT_SECRET"),
+        "username": os.environ.get("JR_API_USERNAME"),
+        "password": os.environ.get("JR_API_PASSWORD"),
+        "client_id": os.environ.get("JR_API_CLIENT_ID"),
+        "client_secret": os.environ.get("JR_API_CLIENT_SECRET"),
         "grant_type": "password",
     }
 

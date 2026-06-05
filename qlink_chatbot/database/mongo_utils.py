@@ -220,6 +220,7 @@ def save_previous_search(
     search_keyword: str,
     search_results: list,
     collection_name: str = "users",
+    filters: dict | None = None,
 ):
     """Store the user's previous search results in the session.
     Only keeps the last 3 searches.
@@ -238,6 +239,7 @@ def save_previous_search(
                             {
                                 "keyword": search_keyword,
                                 "results": search_results,
+                                "filters": filters or {},
                                 "timestamp": now
                             }
                         ],
