@@ -583,11 +583,13 @@ def _bulk_upsert(products: list[dict]) -> dict:
     """Upsert all products in a single bulk_write call — ~50x faster than one-by-one."""
     now = datetime.utcnow()
     ops, skipped = [], 0
+    latest_barcodes = []
     for p in products:
         barcode = p.get("BarCode")
         if not barcode:
             skipped += 1
             continue
+        latest_barcodes.append(barcode)
         doc = _build_sync_doc(p)
         ops.append(UpdateOne(
             {"BarCode": barcode},
@@ -606,7 +608,17 @@ def _bulk_upsert(products: list[dict]) -> dict:
         upserted += result.upserted_count
         modified += result.modified_count
 
-    return {"synced": len(ops), "upserted": upserted, "modified": modified, "skipped": skipped}
+    deleted_stale = website_products_collection.delete_many(
+        {"BarCode": {"$nin": latest_barcodes}}
+    ).deleted_count
+
+    return {
+        "synced": len(ops),
+        "upserted": upserted,
+        "modified": modified,
+        "skipped": skipped,
+        "deleted_stale": deleted_stale,
+    }
 
 
 @dashboard_router.post("/sync-products")
