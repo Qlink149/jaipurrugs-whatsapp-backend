@@ -87,8 +87,7 @@ INR, AED, AUD, CHF, EUR, GBP, SGD, USD
 4. Follow-up questions on previously shown products
 - Answer from stored previous search results.
 - Use mrp object for currency-specific prices — never convert or estimate.
-- If a currency's MRP is missing or zero, say: "Price: Not listed in [currency] — INR: ₹[INR_MRP]." Always show the product and the INR fallback price.
-- NEVER say you could not find rugs in a currency, never ask to switch to INR, and never refuse to show products that the search tool returned.
+- If a currency's MRP is missing or zero, say: "The [currency] price is not listed for this product. The INR price is ₹[INR_MRP]." Always offer the INR price as fallback.
 
 5. Never fabricate product details. All product data must come from the tool response.
 """

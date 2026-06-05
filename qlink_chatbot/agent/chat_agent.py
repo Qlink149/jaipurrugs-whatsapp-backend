@@ -214,67 +214,9 @@ def previously_shown_product_names(previous_searches) -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def normalize_user_message(message: str) -> str:
-    text = (message or "").strip()
-    text = re.sub(r"\beugs\b", "rugs", text, flags=re.IGNORECASE)
-    return text
-
-
-_CURRENCY_PATTERNS = (
-    (r"\busd\b|\bdollars?\b", "USD"),
-    (r"\binr\b|\brupees?\b|₹", "INR"),
-    (r"\baed\b|\bdirhams?\b", "AED"),
-    (r"\bgbp\b|\bpounds?\b", "GBP"),
-    (r"\beur\b|\beuros?\b", "EUR"),
-    (r"\baud\b", "AUD"),
-    (r"\bchf\b", "CHF"),
-    (r"\bsgd\b", "SGD"),
-)
-
-
-def extract_explicit_currency(message: str) -> str:
-    text = (message or "").lower()
-    for pattern, code in _CURRENCY_PATTERNS:
-        if re.search(pattern, text):
-            return code
-    return ""
-
-
 def is_show_more_request(message: str) -> bool:
     text = (message or "").lower()
     return bool(re.search(r"\b(show|see|view|browse|search)\s+more\b|\bmore\s+(products|rugs|options)\b", text))
-
-
-def is_product_search_request(message: str) -> bool:
-    text = (message or "").lower()
-    if is_show_more_request(text):
-        return False
-    if not re.search(r"\b(show|find|search|give me|i want|i need|looking for)\b", text):
-        return False
-    if re.search(r"\b(rug|rugs|eugs|carpet|carpets)\b", text):
-        return True
-    from qlink_chatbot.utils.search_middleware import COMMON_COLORS, KNOWN_MATERIALS, _extract_colors
-
-    colors, _ = _extract_colors(text)
-    if colors:
-        return True
-    return any(m in text for m in KNOWN_MATERIALS)
-
-
-def build_product_prefetch_filters(message: str, detected_currency: str):
-    if not is_product_search_request(message):
-        return None
-    from qlink_chatbot.utils.search_middleware import SearchFilters, _extract_colors
-
-    currency = (extract_explicit_currency(message) or detected_currency or "INR").upper()
-    filters = SearchFilters.from_keyword(message, currency=currency)
-    if not filters.has_any_filter():
-        colors, _ = _extract_colors(message.lower())
-        if colors:
-            filters.colors = colors
-        else:
-            return None
-    return filters
 
 
 def last_product_search_filters(previous_searches) -> dict:
@@ -344,60 +286,6 @@ def agent_alert_tool(alert, sesson_id):
         logger.error("Error occured while using agent alert tool call.")
 
 
-async def _format_prefetched_products(
-    *,
-    user_message: str,
-    products: list,
-    detected_currency: str,
-    session_id: str,
-    collection_name: str,
-    system_prompt: str,
-    no_more: bool = False,
-) -> str:
-    """Single LLM call to format pre-fetched products — skips the tool round-trip."""
-    display_currency = (extract_explicit_currency(user_message) or detected_currency or "INR").upper()
-    if no_more:
-        developer_products = (
-            "No additional matching products remain. Tell the user politely and suggest "
-            "broadening their search. Do NOT say you could not find rugs in a currency."
-        )
-    else:
-        developer_products = (
-            f"Products to display (show ALL {len(products)} in {display_currency}): "
-            f"{json.dumps(products)}"
-        )
-
-    fast_input = [
-        {"role": "developer", "content": f"user name: {user_name(session_id=session_id, collection_name=collection_name)}"},
-        {"role": "developer", "content": f"Display currency: {display_currency}"},
-        {"role": "developer", "content": developer_products},
-        {
-            "role": "developer",
-            "content": (
-                "Format every product with image, size, material, price, and View Product link. "
-                "Use price.amount or mrp.[currency]. If price.amount is null/zero, write: "
-                "'Price: Not listed in [currency] — INR: ₹[mrp.INR]'. "
-                "NEVER say you could not find rugs, never ask to switch to INR, never refuse to show results. "
-                "Append at the end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'"
-            ),
-        },
-        {"role": "user", "content": _user_content(user_message)},
-    ]
-    response = await client.responses.create(
-        model="gpt-4.1-mini",
-        input=fast_input,
-        instructions=system_prompt,
-        max_output_tokens=2048,
-        text=output_schema,
-        temperature=0.2,
-    )
-    for out_item in (response.output or []):
-        for content_item in (getattr(out_item, "content", None) or []):
-            if getattr(content_item, "text", None):
-                return json.loads(content_item.text).get("message")
-    return "I'm sorry, I couldn't generate a response. Please try again."
-
-
 async def chat_agent(
     chat_history,
     user_message,
@@ -412,8 +300,6 @@ async def chat_agent(
     try:
         if not client:
             raise RuntimeError("OPENAI_API_KEY is not configured.")
-        user_message = normalize_user_message(user_message)
-        detected_currency = (extract_explicit_currency(user_message) or detected_currency or "INR").upper()
         system_prompt_variable = return_system_prompt()
         if system_prompt_variable:
             system_prompt = build_system_prompt(
@@ -470,56 +356,6 @@ async def chat_agent(
                     collection_name=collection_name,
                     filters=serialize_search_filters(prefetch_filters),
                 )
-
-        product_prefetch: list | dict | None = None
-        if not show_more_request:
-            from qlink_chatbot.utils.search_middleware import search as _mw_search
-
-            prefetch_filters = build_product_prefetch_filters(user_message, detected_currency)
-            if prefetch_filters:
-                prefetch_filters.exclude_keys = exclude_product_keys
-                prefetch_filters.exclude_names = exclude_product_names
-                product_prefetch = await _mw_search(prefetch_filters, client_ip=client_ip)
-                if isinstance(product_prefetch, list) and product_prefetch:
-                    save_previous_search(
-                        session_id,
-                        product_search_label(
-                            {"colors": prefetch_filters.colors, "materials": prefetch_filters.materials,
-                             "styles": prefetch_filters.styles, "currency": prefetch_filters.currency}
-                        ),
-                        product_prefetch,
-                        collection_name=collection_name,
-                        filters=serialize_search_filters(prefetch_filters),
-                    )
-
-        if isinstance(show_more_prefetch, list) and show_more_prefetch:
-            return await _format_prefetched_products(
-                user_message=user_message,
-                products=show_more_prefetch,
-                detected_currency=detected_currency,
-                session_id=session_id,
-                collection_name=collection_name,
-                system_prompt=system_prompt,
-            )
-        if show_more_prefetch is not None:
-            return await _format_prefetched_products(
-                user_message=user_message,
-                products=[],
-                detected_currency=detected_currency,
-                session_id=session_id,
-                collection_name=collection_name,
-                system_prompt=system_prompt,
-                no_more=True,
-            )
-        if isinstance(product_prefetch, list) and product_prefetch:
-            return await _format_prefetched_products(
-                user_message=user_message,
-                products=product_prefetch,
-                detected_currency=detected_currency,
-                session_id=session_id,
-                collection_name=collection_name,
-                system_prompt=system_prompt,
-            )
 
         input_list = [
             {"role": "developer", "content": f"Chat history:\n{format_recent_chat_for_ai(chat_history)}"},
