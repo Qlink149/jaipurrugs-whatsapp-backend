@@ -55,71 +55,41 @@ system_tool_rules = """
 
 
 jaipur Rugs Product Search – Tool Usage Rules
-1. Single Tool, Multiple Query Types
-- `jaipur_rugs_product_search` is the only tool.
-- The same tool is used for both single-query and multi-query searches.
-- No separate tools or modes exist.
 
-2. Single Query Usage
-- Use when only one attribute is provided.
-- Pass the value directly as the keyword.
+1. Always use structured fields — never pack everything into keyword
+Extract each attribute from the user's message into its own field:
+- colors        → ["blue"], ["red", "ivory"]
+- shapes        → ["round"], ["runner"], ["oval"]
+- sizes         → ["8x10"], ["5x7"]
+- materials     → ["wool"], ["silk"]
+- constructions → ["hand knotted"], ["hand tufted"], ["flat weave"]
+- styles        → ["modern"], ["traditional"], ["bohemian"]
+- price_max + currency → price_max=1000, currency="USD"
+- weight_max    → weight_max=8  (means ≤8 kg)
+- keyword       → only for collection names, design codes, or text with no matching field
 
-Examples:
-{"keyword": "red"}
-{"keyword": "wool"}
-{"keyword": "8x10"}
-{"keyword": "modern"}
-{"keyword": "hand knotted"}
+2. Examples of correct calls
+User: "blue wool rug"
+→ {"colors": ["blue"], "materials": ["wool"]}
 
-3. Multi-Query Usage
-- Use when multiple attributes are provided.
-- Combine all attributes using '&' (ampersand).
-- Order does not matter.
+User: "8x10 hand knotted round rug"
+→ {"sizes": ["8x10"], "constructions": ["hand knotted"], "shapes": ["round"]}
 
-Supported attributes:
-- Color
-- Style
-- Material
-- Dimensions
-- Price (currency + value)
-- Weight (in kg)
+User: "red and ivory modern rug under USD 500"
+→ {"colors": ["red", "ivory"], "styles": ["modern"], "price_max": 500, "currency": "USD"}
 
-Examples:
-{"keyword": "red&8x10"}
-{"keyword": "modern&wool"}
-{"keyword": "blue&hand knotted&9x12"}
-{"keyword": "red&8x10&USD 1000"}
-{"keyword": "ivory&traditional&INR 80000"}
-{"keyword": "8kg"}
-{"keyword": "wool&8kg"}
-{"keyword": "red&8kg&INR 30000"}
+User: "lightweight wool rug under 6kg"
+→ {"materials": ["wool"], "weight_max": 6}
 
-4. Price Handling
-- Price is optional.
-- Format: <CURRENCY_CODE> <AMOUNT>
-- Near match: ±5%
-- Acceptable match: ±10%
-
-Supported currencies:
+3. Supported currencies
 INR, AED, AUD, CHF, EUR, GBP, SGD, USD
 
-5. Weight Handling
-- Weight is optional.
-- Format: <NUMBER>kg  (e.g. 8kg, 5kg, 12kg)
-- Treated as a ceiling — only rugs at or below that weight are returned.
-- Example: user says "lightweight rugs" or "under 8 kg" → use keyword "8kg"
+4. Follow-up questions on previously shown products
+- Answer from stored previous search results.
+- Use mrp object for currency-specific prices — never convert or estimate.
+- If a currency's MRP is missing, say it is unavailable.
 
-6. Follow-up Questions On Previously Shown Products
-- If user asks details like price, size, material, weight, SKU, or link for a previously shown rug, use stored previous search results first.
-- Prefer exact match by product name or SKU from the recent shown products.
-- If no matching previously shown product exists, ask the user to confirm product name/SKU.
-
-7. Currency / Price Rules (Strict)
-- Default currency is always INR. Show INR prices unless the user explicitly requests another currency.
-- Use only MRP values returned in product data (`mrp` object with INR, AED, AUD, CHF, EUR, GBP, SGD, USD).
-- Never convert price using exchange rates.
-- Never derive one currency from another.
-- If user asks price in a currency and that currency MRP is unavailable, clearly say that currency MRP is unavailable for that product.
+5. Never fabricate product details. All product data must come from the tool response.
 """
 
 system_contact_info = """

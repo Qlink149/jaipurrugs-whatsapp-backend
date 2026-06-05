@@ -49,16 +49,22 @@ tools = [
     {
         "type": "function",
         "name": "jaipur_rugs_product_search",
-        "description": "Search rugs from Jaipur Rugs API and return formatted product details like URL, weight, fabric, image, description, and MRP values.",
+        "description": "Search Jaipur Rugs products. Extract structured filters from the user's request and pass them as separate fields — do NOT pack everything into a single keyword string.",
         "parameters": {
             "type": "object",
             "properties": {
-                "keyword": {
-                    "type": "string",
-                    "description": "Single or multi-query string joined by '&'. Examples: 'red', '8x10', 'wool', 'hand knotted', 'red&8x10', 'red&8x10&USD 1000'."
-                }
+                "colors":        {"type": "array", "items": {"type": "string"}, "description": "Color names. e.g. ['blue', 'ivory']"},
+                "shapes":        {"type": "array", "items": {"type": "string"}, "description": "Rug shape. e.g. ['round'], ['runner'], ['oval']"},
+                "sizes":         {"type": "array", "items": {"type": "string"}, "description": "Dimensions in WxH format. e.g. ['8x10', '5x7']"},
+                "materials":     {"type": "array", "items": {"type": "string"}, "description": "Material/fabric. e.g. ['wool'], ['silk'], ['viscose']"},
+                "constructions": {"type": "array", "items": {"type": "string"}, "description": "Construction type. e.g. ['hand knotted'], ['hand tufted'], ['flat weave']"},
+                "styles":        {"type": "array", "items": {"type": "string"}, "description": "Design style. e.g. ['modern'], ['traditional'], ['bohemian']"},
+                "price_max":     {"type": "number", "description": "Maximum price budget (in the currency field below)."},
+                "currency":      {"type": "string", "description": "Currency code for price_max. One of: INR, USD, EUR, GBP, AUD, CHF, SGD, AED. Default INR."},
+                "weight_max":    {"type": "number", "description": "Maximum weight in kg. e.g. 8 means 'under 8kg'."},
+                "keyword":       {"type": "string", "description": "Free-text fallback only when none of the above fields apply. e.g. a collection name or design code."}
             },
-            "required": ["keyword"]
+            "required": []
         }
     },
     {
@@ -256,8 +262,30 @@ async def chat_agent(
                 args = json.loads(item.arguments)
                 output = ""
                 if item.name == "jaipur_rugs_product_search":
-                    keyword = args.get("keyword")
-                    products = await jaipur_rugs_product_search(keyword, client_ip=client_ip, country_code=country_code, currency=detected_currency)
+                    from qlink_chatbot.utils.search_middleware import SearchFilters, search as _mw_search
+                    kw = args.get("keyword", "")
+                    resolved_currency = (args.get("currency") or detected_currency or "INR").upper()
+
+                    if any(args.get(f) for f in ("colors","shapes","sizes","materials","constructions","styles","price_max","weight_max")):
+                        # LLM provided structured params → use middleware directly
+                        filters = SearchFilters.from_params(
+                            colors=args.get("colors"),
+                            shapes=args.get("shapes"),
+                            sizes=args.get("sizes"),
+                            materials=args.get("materials"),
+                            constructions=args.get("constructions"),
+                            styles=args.get("styles"),
+                            price_max=args.get("price_max"),
+                            currency=resolved_currency,
+                            weight_max=args.get("weight_max"),
+                        )
+                        if kw:  # merge any free-text keyword into generics
+                            kw_filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
+                            filters.generics.extend(kw_filters.generics)
+                        products = await _mw_search(filters, client_ip=client_ip)
+                    else:
+                        # Fallback: LLM used old keyword-only style
+                        products = await jaipur_rugs_product_search(kw, client_ip=client_ip, country_code=country_code, currency=resolved_currency)
                     save_previous_search(
                         session_id,
                         keyword,
