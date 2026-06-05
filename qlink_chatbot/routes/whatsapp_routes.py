@@ -10,9 +10,10 @@ from qlink_chatbot.database.mongo_utils import (
     get_session_by_id,
     save_message,
     save_user_name,
+    update_session_country,
     whatsapp_status_events_collection,
 )
-from qlink_chatbot.utils.geo_utils import currency_for_country
+from qlink_chatbot.utils.geo_utils import currency_for_country, parse_whatsapp_phone
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_responses
 from qlink_chatbot.whatsapp_functions.send_typing_indicator import (
@@ -304,17 +305,33 @@ async def _process_message(request_data: dict) -> None:
             return
 
         session_id = phone_number.lower()
+        phone_geo = parse_whatsapp_phone(phone_number)
+        country_iso = phone_geo.get("country_iso", "")
+        detected_currency = phone_geo.get("currency") or currency_for_country(country_iso)
+
         session = get_session_by_id(session_id=session_id,
                                     collection_name=WHATSAPP_COLLECTION_NAME)
 
         if not session:
-            create_session(session_id=session_id, country_code="",
+            create_session(session_id=session_id, country_code=country_iso,
                            name=whatsapp_username, is_ai=True,
                            collection_name=WHATSAPP_COLLECTION_NAME)
-            session = {"chat_history": [], "country_code": ""}
-        elif whatsapp_username and whatsapp_username != session.get("user_name", ""):
-            save_user_name(session_id=session_id, name=whatsapp_username,
-                           collection_name=WHATSAPP_COLLECTION_NAME)
+            session = {
+                "chat_history": [],
+                "country_code": country_iso,
+                "detected_currency": detected_currency,
+            }
+        else:
+            if country_iso and country_iso != session.get("country_code", ""):
+                update_session_country(
+                    session_id=session_id,
+                    country_code=country_iso,
+                    collection_name=WHATSAPP_COLLECTION_NAME,
+                )
+                session["country_code"] = country_iso
+            if whatsapp_username and whatsapp_username != session.get("user_name", ""):
+                save_user_name(session_id=session_id, name=whatsapp_username,
+                               collection_name=WHATSAPP_COLLECTION_NAME)
 
         save_message(session_id=session_id, role="user", content=user_text,
                      collection_name=WHATSAPP_COLLECTION_NAME)
@@ -326,16 +343,17 @@ async def _process_message(request_data: dict) -> None:
 
         stop_typing = asyncio.Event()
         typing_task = asyncio.create_task(typing_indicator_loop(message_id, stop_typing))
-        detected_currency = currency_for_country(session.get("country_code", ""))
+        resolved_country = session.get("country_code") or country_iso
+        resolved_currency = detected_currency or currency_for_country(resolved_country)
         try:
             bot_text = await chat_agent(
                 chat_history=session.get("chat_history", []),
                 user_message=user_text,
                 session_id=session_id,
-                country_code=session.get("country_code", ""),
+                country_code=resolved_country,
                 client_ip="",
                 collection_name=WHATSAPP_COLLECTION_NAME,
-                detected_currency=detected_currency,
+                detected_currency=resolved_currency,
             )
         finally:
             stop_typing.set()
