@@ -199,6 +199,19 @@ def previously_shown_product_keys(previous_searches) -> list[str]:
     return list(dict.fromkeys(keys))
 
 
+def previously_shown_product_names(previous_searches) -> list[str]:
+    names = []
+    if not isinstance(previous_searches, list):
+        return names
+    for search in previous_searches:
+        if not isinstance(search, dict):
+            continue
+        for product in search.get("results", []) or []:
+            if isinstance(product, dict) and product.get("name"):
+                names.append(str(product["name"]).strip())
+    return list(dict.fromkeys(names))
+
+
 def is_show_more_request(message: str) -> bool:
     text = (message or "").lower()
     return bool(re.search(r"\b(show|see|view|browse|search)\s+more\b|\bmore\s+(products|rugs|options)\b", text))
@@ -307,6 +320,7 @@ async def chat_agent(
         recent_searches = get_previous_search(session_id=session_id, collection_name=collection_name)
         latest_products_context = format_recent_products_for_ai(recent_searches)
         exclude_product_keys = previously_shown_product_keys(recent_searches)
+        exclude_product_names = previously_shown_product_names(recent_searches)
         show_more_request = is_show_more_request(user_message)
         previous_product_filters = last_product_search_filters(recent_searches)
 
@@ -372,6 +386,7 @@ async def chat_agent(
                             currency=(previous_product_filters.get("currency") or resolved_currency),
                             weight_max=previous_product_filters.get("weight_max"),
                             exclude_keys=exclude_product_keys,
+                            exclude_names=exclude_product_names,
                         )
                         products = await _mw_search(filters, client_ip=client_ip)
                     elif any(args.get(f) for f in ("colors","shapes","sizes","materials","constructions","styles","price_max","weight_max")):

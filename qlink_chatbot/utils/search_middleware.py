@@ -76,6 +76,7 @@ class SearchFilters:
     currency: str = DEFAULT_CURRENCY
     limit: int = 3
     exclude_keys: list[str] = field(default_factory=list)
+    exclude_names: list[str] = field(default_factory=list)
 
     # ── Constructors ─────────────────────────────────────────────────────────
 
@@ -178,6 +179,7 @@ class SearchFilters:
         weight_max: float | None = None,
         limit: int = 3,
         exclude_keys: list[str] | None = None,
+        exclude_names: list[str] | None = None,
     ) -> "SearchFilters":
         """Build filters from explicit parameters (used by REST endpoint)."""
         price_filter = None
@@ -204,6 +206,7 @@ class SearchFilters:
             currency=currency.upper() if currency else DEFAULT_CURRENCY,
             limit=limit,
             exclude_keys=[str(k).strip().upper() for k in (exclude_keys or []) if k],
+            exclude_names=[_normalize_name(n) for n in (exclude_names or []) if n],
         )
 
     # ── Routing decision ─────────────────────────────────────────────────────
@@ -355,6 +358,15 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
 
     if not results:
         return {"error": "No products found."}
+
+    if filters.exclude_names:
+        excluded_names = set(filters.exclude_names)
+        results = [
+            p for p in results
+            if _normalize_name((p.get("raw") or p).get("Name")) not in excluded_names
+        ]
+        if not results:
+            return {"error": "No products found."}
 
     if filters.weight_filter is not None:
         results = [
@@ -511,6 +523,10 @@ def _sku(product: dict) -> str:
     return ""
 
 
+def _normalize_name(name) -> str:
+    return re.sub(r"\s+", " ", str(name or "").strip().lower())
+
+
 def _dedupe_by_sku(products: list[dict]) -> list[dict]:
     seen, unique = set(), []
     for p in products:
@@ -566,10 +582,11 @@ def _format(products: list[dict], currency: str, currency_field: str,
         highest_pct = color_map.get(highest_color, 0.0)
         slug = raw.get("ProductURL") or ""
         barcode = p.get("BarCode") or raw.get("BarCode") or ""
+        display_name = raw.get("Name") or raw.get("Design") or raw.get("Collection") or raw.get("GrColor") or sku
         out.append({
             "url": f"https://www.jaipurrugs.com/in/rugs/{slug}?barcode={barcode}" if slug else "",
             "price": {"currency": currency, "amount": raw.get(currency_field)},
-            "name": raw.get("Name", ""),
+            "name": display_name,
             "SKU": sku,
             "barcode": barcode,
             "collection": raw.get("Collection", ""),
