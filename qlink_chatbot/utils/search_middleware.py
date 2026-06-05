@@ -286,7 +286,7 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
     else:
         color_fields = [None]
 
-    size_fields = ["search.size.exact", "search.size.group", None] if filters.sizes else [None]
+    size_fields = ["search.size.exact", "search.size.group"] if filters.sizes else [None]
     material_fields = (
         ["search.material.primary", "search.material.family", "search.material.details", None]
         if filters.materials else [None]

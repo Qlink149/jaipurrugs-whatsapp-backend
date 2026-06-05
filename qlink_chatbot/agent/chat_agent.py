@@ -389,18 +389,18 @@ def format_product_results(products: list[dict], currency: str, user_display_nam
         title = product.get("name") or product.get("collection") or product.get("SKU") or "Jaipur Rugs Product"
         lines = [
             f"{index}. **{title}**",
-            f"Size: {product.get('size') or 'Not listed'}",
-            f"Material: {product.get('material') or product.get('fabric') or 'Not listed'}",
-            product_price_line(product, currency),
+            f"- Size: {product.get('size') or 'Not listed'}",
+            f"- Material: {product.get('material') or product.get('fabric') or 'Not listed'}",
+            f"- {product_price_line(product, currency)}",
         ]
         if product.get("style"):
-            lines.append(f"Style: {product.get('style')}")
+            lines.append(f"- Style: {product.get('style')}")
         if product.get("construction"):
-            lines.append(f"Construction: {product.get('construction')}")
+            lines.append(f"- Construction: {product.get('construction')}")
         if product.get("url"):
-            lines.append(f"[View Product]({product.get('url')})")
+            lines.append(f"- [View Product]({product.get('url')})")
         if product.get("image"):
-            lines.append(f"![Image]({product.get('image')})")
+            lines.append(f"- ![Image]({product.get('image')})")
         blocks.append("\n".join(lines))
 
     blocks.append("[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)")
@@ -561,6 +561,8 @@ async def chat_agent(
                 "content": f"user name: {current_user_name}",
             },
             {"role": "developer", "content": "Never produce filler text like 'searching...' or 'one moment please'. If a tool is needed, directly call the tool without any extra wording."},
+            {"role": "developer", "content": "If `jaipur_rugs_product_search` returns an empty list or error (e.g., no results for a 'show more' request), do NOT re-show or repeat products that were already shown to the user. Instead respond: 'I couldn't find more rugs matching your criteria. Would you like to adjust the filters or browse the full catalog?'"},
+            {"role": "developer", "content": "PRODUCT TITLE RULE: When displaying a rug from tool results, the FIRST line of each product block MUST be the product number followed by the `name` field in bold — exactly like `1. **Bespoke Sile**`. NEVER write `- Collection: Bespoke Sile` or label the name with any key. The bold name line MUST come first, before any `- Size:`, `- Material:`, or other fields."},
             {"role": "developer", "content": "When responding: do not add any narrative, status updates, waiting messages, politeness fillers, or redundant sentences. Either answer directly or call a tool directly."},
             {"role": "developer", "content": "When `jaipur_rugs_product_search` returns multiple products, include all returned products (up to 3) in the final user-visible response. Do not show only one unless only one was returned."},
             {"role": "developer", "content": "Only skip the search tool if the user is asking about a SPECIFIC previously shown rug by position or name (e.g. 'what is the price of the first one?', 'price in GBP for rug 2', 'the link for rug number 2', 'what material is that last one?'). In that case, answer from 'Latest shown products' using the exact mrp.[currency] value from MongoDB. If that currency value is missing or zero, say it is not listed and give the INR price. For ALL other requests — including any request mentioning a color, size, material, style, or asking to 'show', 'find', or 'search' — call `jaipur_rugs_product_search`."},
