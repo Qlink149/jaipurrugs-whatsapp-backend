@@ -210,6 +210,20 @@ def product_search_label(args: dict) -> str:
         parts.append(str(args.get("keyword")).strip())
     return " & ".join(part for part in parts if part) or "search"
 
+
+def merge_keyword_filters(filters, keyword_filters) -> None:
+    for attr in ("colors", "shapes", "sizes", "materials", "constructions", "styles", "generics"):
+        merged = list(getattr(filters, attr, []) or [])
+        for value in getattr(keyword_filters, attr, []) or []:
+            if value not in merged:
+                merged.append(value)
+        setattr(filters, attr, merged)
+
+    if not filters.price_filter and keyword_filters.price_filter:
+        filters.price_filter = keyword_filters.price_filter
+    if filters.weight_filter is None and keyword_filters.weight_filter is not None:
+        filters.weight_filter = keyword_filters.weight_filter
+
 def agent_alert_tool(alert, sesson_id):
     """Tool function to raise an agent alert"""
     try:
@@ -322,7 +336,7 @@ async def chat_agent(
                         )
                         if kw:  # merge any free-text keyword into generics
                             kw_filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
-                            filters.generics.extend(kw_filters.generics)
+                            merge_keyword_filters(filters, kw_filters)
                         products = await _mw_search(filters, client_ip=client_ip)
                     else:
                         # Fallback: LLM used old keyword-only style
