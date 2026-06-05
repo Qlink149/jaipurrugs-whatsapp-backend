@@ -289,6 +289,32 @@ def user_name(session_id: str, collection_name: str = "users"):
         logger.error("Error fetching user name", extra={"error": e})
         raise e
     
+def init_system_prompt():
+    """Seed the MongoDB system_prompt doc from the static file if it doesn't exist yet.
+    Called once on app startup so the prompt is always editable via the API.
+    """
+    try:
+        if internal_collection.find_one({"category": "system_prompt"}, {"_id": 1}):
+            logger.info("System prompt already in MongoDB.")
+            return
+        from qlink_chatbot.agent.utils.chat_agent_prompts import (
+            system_identity,
+            system_conversation_style,
+            system_product_display_format,
+            system_others,
+        )
+        internal_collection.insert_one({
+            "category": "system_prompt",
+            "system_identity": system_identity.strip(),
+            "system_conversation_style": system_conversation_style.strip(),
+            "system_product_display_format": system_product_display_format.strip(),
+            "system_others": system_others.strip(),
+        })
+        logger.info("System prompt seeded into MongoDB from static file.")
+    except Exception as e:
+        logger.error("Error seeding system prompt", extra={"error": e})
+
+
 def return_system_prompt():
     """Returns system prompt."""
     try:

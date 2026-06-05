@@ -13,6 +13,7 @@ from qlink_chatbot.routes.whatsapp_routes import whatsapp_router
 from qlink_chatbot.routes.ws_routes import (
     ws_router,
 )
+from qlink_chatbot.database.mongo_utils import init_system_prompt
 from qlink_chatbot.utils.logger_config import logger
 
 DEFAULT_CORS_ORIGINS = [
@@ -74,4 +75,5 @@ def ping():
     logger.info("Ping endpoint called")
     return {"message": "Jaipur Rugs chatbot backend API is up and running"}
 
+init_system_prompt()
 logger.info("Jaipur Rugs backend initialized successfully.")
