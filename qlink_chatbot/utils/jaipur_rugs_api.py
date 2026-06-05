@@ -82,20 +82,6 @@ CALLING_CODE_TO_CURRENCY: dict[str, str] = {
 DEFAULT_CURRENCY = "INR"
 
 
-def currency_from_phone_number(phone_number: str) -> str:
-    """Derive display currency from a WhatsApp phone number (starts with calling code).
-
-    e.g. "919876543210" -> "INR", "971501234567" -> "AED", "12015551234" -> "USD"
-    Returns empty string when the calling code is not recognised.
-    """
-    digits = re.sub(r"\D", "", phone_number or "")
-    for length in range(min(3, len(digits)), 0, -1):
-        currency = CALLING_CODE_TO_CURRENCY.get(digits[:length])
-        if currency:
-            return currency
-    return ""
-
-
 def _extract_colors_from_text(text: str) -> tuple[list[str], str]:
     """Extract known colors from free text and return (colors, residual_text)."""
     extracted: list[str] = []
