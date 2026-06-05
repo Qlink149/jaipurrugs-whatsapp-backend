@@ -160,6 +160,8 @@ def format_recent_products_for_ai(previous_searches, max_products: int = 3) -> s
     latest_search = previous_searches[-1] if isinstance(previous_searches, list) else {}
     results = latest_search.get("results", []) if isinstance(latest_search, dict) else []
 
+    if not isinstance(results, list):
+        return "[]"
     compact_products = []
     for product in results[:max_products]:
         if not isinstance(product, dict):
@@ -406,6 +408,7 @@ async def chat_agent(
                             currency=resolved_currency,
                             weight_max=args.get("weight_max"),
                             exclude_keys=exclude_product_keys,
+                            exclude_names=exclude_product_names,
                         )
                         if kw:  # merge any free-text keyword into generics
                             kw_filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
@@ -416,15 +419,16 @@ async def chat_agent(
                         filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
                         filters.exclude_keys = exclude_product_keys
                         products = await _mw_search(filters, client_ip=client_ip)
-                    search_label = product_search_label(args)
-                    save_previous_search(
-                        session_id,
-                        search_label,
-                        products,
-                        collection_name=collection_name,
-                        filters=serialize_search_filters(filters),
-                    )
                     output = json.dumps(products)
+                    if isinstance(products, list) and products:
+                        search_label = product_search_label(args)
+                        save_previous_search(
+                            session_id,
+                            search_label,
+                            products,
+                            collection_name=collection_name,
+                            filters=serialize_search_filters(filters),
+                        )
 
                 elif item.name == "save_user_name":
                     name = args.get("name")
