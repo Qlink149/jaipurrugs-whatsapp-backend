@@ -30,7 +30,8 @@ jobs:
           username: root
           password: "3G)jy%N{?oj[m-bA"
           source: "jr_web_backend.tar"
-          target: "/tmp"
+          target: "/tmp/jr_deploy"
+          rm: true
 
       - name: Deploy to VPS
         uses: appleboy/ssh-action@1530429296e979861824d74fb800013190b5dee0 # master
@@ -40,9 +41,7 @@ jobs:
           password: "3G)jy%N{?oj[m-bA"
           script: |
             set -e
-            IMAGE_TAR="$(find /tmp -name jr_web_backend.tar -type f | head -n 1)"
-            test -n "$IMAGE_TAR"
-            docker load -i "$IMAGE_TAR"
+            docker load -i /tmp/jr_deploy/jr_web_backend.tar
             docker stop qlink_web || true
             docker rm qlink_web || true
             docker run -d \
@@ -50,29 +49,29 @@ jobs:
               -p 8000:8000 \
               -e PYTHONUNBUFFERED=1 \
               -e PYTHONDONTWRITEBYTECODE=1 \
-              -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
-              -e MONGO_URI=${{ secrets.MONGO_URI }} \
-              -e GUPSHUP_APP_ID=${{ secrets.GUPSHUP_APP_ID }} \
-              -e GUPSHUP_TOKEN=${{ secrets.GUPSHUP_TOKEN }} \
-              -e GUPSHUP_APP_NAME=${{ secrets.GUPSHUP_APP_NAME }} \
-              -e GUPSHUP_API_KEY=${{ secrets.GUPSHUP_API_KEY }} \
-              -e GUPSHUP_SOURCE=${{ secrets.GUPSHUP_SOURCE }} \
-              -e DEFAULT_COUNTRY_CODE=${{ secrets.DEFAULT_COUNTRY_CODE }} \
-              -e ENV_MODE=${{ secrets.ENV_MODE }} \
-              -e PINECONE_API=${{ secrets.PINECONE_API }} \
-              -e R2_ACCESS_KEY=${{ secrets.R2_ACCESS_KEY }} \
-              -e R2_SECRET_KEY=${{ secrets.R2_SECRET_KEY }} \
-              -e WHAPI_TOKEN=${{ secrets.WHAPI_TOKEN }} \
-              -e WEBHOOK_API=${{ secrets.WEBHOOK_API }} \
-              -e QLINK_GUPSHUP_APP_ID=${{ secrets.QLINK_GUPSHUP_APP_ID }} \
-              -e QLINK_GUPSHUP_PARTNER_APP_TOKEN=${{ secrets.QLINK_GUPSHUP_PARTNER_APP_TOKEN }} \
-              -e QLINK_GUPSHUP_SOURCE=${{ secrets.QLINK_GUPSHUP_SOURCE }} \
-              -e QLINK_GUPSHUP_APP_NAME=${{ secrets.QLINK_GUPSHUP_APP_NAME }} \
-              -e JR_API_USERNAME=${{ secrets.JR_API_USERNAME }} \
-              -e JR_API_PASSWORD=${{ secrets.JR_API_PASSWORD }} \
-              -e JR_API_CLIENT_ID=${{ secrets.JR_API_CLIENT_ID }} \
-              -e JR_API_CLIENT_SECRET=${{ secrets.JR_API_CLIENT_SECRET }} \
-              -e CORS_ORIGINS=${{ secrets.CORS_ORIGINS }} \
+              -e OPENAI_API_KEY='${{ secrets.OPENAI_API_KEY }}' \
+              -e MONGO_URI='${{ secrets.MONGO_URI }}' \
+              -e GUPSHUP_APP_ID='${{ secrets.GUPSHUP_APP_ID }}' \
+              -e GUPSHUP_TOKEN='${{ secrets.GUPSHUP_TOKEN }}' \
+              -e GUPSHUP_APP_NAME='${{ secrets.GUPSHUP_APP_NAME }}' \
+              -e GUPSHUP_API_KEY='${{ secrets.GUPSHUP_API_KEY }}' \
+              -e GUPSHUP_SOURCE='${{ secrets.GUPSHUP_SOURCE }}' \
+              -e DEFAULT_COUNTRY_CODE='${{ secrets.DEFAULT_COUNTRY_CODE }}' \
+              -e ENV_MODE='${{ secrets.ENV_MODE }}' \
+              -e PINECONE_API='${{ secrets.PINECONE_API }}' \
+              -e R2_ACCESS_KEY='${{ secrets.R2_ACCESS_KEY }}' \
+              -e R2_SECRET_KEY='${{ secrets.R2_SECRET_KEY }}' \
+              -e WHAPI_TOKEN='${{ secrets.WHAPI_TOKEN }}' \
+              -e WEBHOOK_API='${{ secrets.WEBHOOK_API }}' \
+              -e QLINK_GUPSHUP_APP_ID='${{ secrets.QLINK_GUPSHUP_APP_ID }}' \
+              -e QLINK_GUPSHUP_PARTNER_APP_TOKEN='${{ secrets.QLINK_GUPSHUP_PARTNER_APP_TOKEN }}' \
+              -e QLINK_GUPSHUP_SOURCE='${{ secrets.QLINK_GUPSHUP_SOURCE }}' \
+              -e QLINK_GUPSHUP_APP_NAME='${{ secrets.QLINK_GUPSHUP_APP_NAME }}' \
+              -e JR_API_USERNAME='${{ secrets.JR_API_USERNAME }}' \
+              -e JR_API_PASSWORD='${{ secrets.JR_API_PASSWORD }}' \
+              -e JR_API_CLIENT_ID='${{ secrets.JR_API_CLIENT_ID }}' \
+              -e JR_API_CLIENT_SECRET='${{ secrets.JR_API_CLIENT_SECRET }}' \
+              -e CORS_ORIGINS='${{ secrets.CORS_ORIGINS }}' \
               jr_web_backend:latest
 
       - name: Cleanup
