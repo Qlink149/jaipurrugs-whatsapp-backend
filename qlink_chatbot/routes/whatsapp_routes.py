@@ -12,6 +12,7 @@ from qlink_chatbot.database.mongo_utils import (
     save_user_name,
     whatsapp_status_events_collection,
 )
+from qlink_chatbot.utils.geo_utils import country_code_for_phone, currency_for_country
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_responses
 from qlink_chatbot.whatsapp_functions.send_typing_indicator import (
@@ -131,7 +132,23 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
                     "button_text": btn_label,
                 }
             else:
-                pending_text.append(_clean_for_whatsapp(block))
+                text = _clean_for_whatsapp(block)
+                text, product_url = _extract_cta(text)
+                if product_url and product_url not in seen_product_urls:
+                    if pending_text:
+                        responses.append({"type": "text", "text": "\n\n".join(pending_text)})
+                        pending_text = []
+                    seen_product_urls.add(product_url)
+                    responses.append({
+                        "type": "interactive_cta",
+                        "button_url": product_url,
+                        "caption": text or "Tap below to view this rug on Jaipur Rugs.",
+                        "button_text": "View Product",
+                    })
+                else:
+                    # Strip any remaining markdown links to plain URLs (WhatsApp doesn't render [text](url))
+                    text = re.sub(r'\[([^\]]+)\]\((https?://[^\)]+)\)', r'\2', text)
+                    pending_text.append(text)
 
     if pending_text:
         responses.append({"type": "text", "text": "\n\n".join(pending_text)})
@@ -290,11 +307,12 @@ async def _process_message(request_data: dict) -> None:
         session = get_session_by_id(session_id=session_id,
                                     collection_name=WHATSAPP_COLLECTION_NAME)
 
+        phone_country_code = country_code_for_phone(phone_number)
         if not session:
-            create_session(session_id=session_id, country_code="",
+            create_session(session_id=session_id, country_code=phone_country_code,
                            name=whatsapp_username, is_ai=True,
                            collection_name=WHATSAPP_COLLECTION_NAME)
-            session = {"chat_history": [], "country_code": ""}
+            session = {"chat_history": [], "country_code": phone_country_code}
         elif whatsapp_username and whatsapp_username != session.get("user_name", ""):
             save_user_name(session_id=session_id, name=whatsapp_username,
                            collection_name=WHATSAPP_COLLECTION_NAME)
@@ -309,14 +327,16 @@ async def _process_message(request_data: dict) -> None:
 
         stop_typing = asyncio.Event()
         typing_task = asyncio.create_task(typing_indicator_loop(message_id, stop_typing))
+        detected_currency = currency_for_country(session.get("country_code", "") or phone_number)
         try:
             bot_text = await chat_agent(
                 chat_history=session.get("chat_history", []),
                 user_message=user_text,
                 session_id=session_id,
-                country_code=session.get("country_code", ""),
+                country_code=session.get("country_code", "") or phone_country_code,
                 client_ip="",
                 collection_name=WHATSAPP_COLLECTION_NAME,
+                detected_currency=detected_currency,
             )
         finally:
             stop_typing.set()
@@ -342,7 +362,7 @@ async def _process_message(request_data: dict) -> None:
             try:
                 dispatch_whatsapp_responses(
                     phone_number=phone_number,
-                    bot_responses=[{"type": "text", "text": "Unexpected error occurred."}],
+                    bot_responses=[{"type": "text", "text": "Sorry, something went wrong on our end. Please try again in a moment."}],
                 )
             except Exception as send_error:
                 logger.error("Failed to send fallback message",

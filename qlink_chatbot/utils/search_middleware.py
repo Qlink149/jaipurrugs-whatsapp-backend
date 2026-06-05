@@ -57,6 +57,8 @@ CURRENCY_FIELDS = {
 }
 
 DEFAULT_CURRENCY = "INR"
+PRICE_CURRENCIES_RE = r"(inr|usd|eur|gbp|aud|chf|sgd|aed|₹|\$|£|€)"
+PRICE_AMOUNT_RE = r"([\d,]+(?:\.\d+)?)"
 
 
 # ── Filter dataclass ─────────────────────────────────────────────────────────
@@ -83,10 +85,10 @@ class SearchFilters:
     @classmethod
     def from_keyword(cls, keyword: str, currency: str = DEFAULT_CURRENCY, limit: int = 3) -> "SearchFilters":
         """Parse a &-separated AI keyword string into structured filters."""
+        keyword, price_filter = _extract_price_filter(keyword, currency)
         parts = [p.strip() for p in keyword.split("&")]
         colors, shapes, sizes, materials, constructions, styles = [], [], [], [], [], []
         generics = []
-        price_filter = None
         weight_filter = None
 
         for part in parts:
@@ -104,7 +106,7 @@ class SearchFilters:
             # Price: "USD 500", "INR 30000"
             pm = re.match(r'^(inr|usd|eur|gbp|aud|chf|sgd|aed)\s+([\d,]+(?:\.\d+)?)$', lower)
             if pm:
-                price_filter = {"currency": pm.group(1).upper(), "amount": float(pm.group(2).replace(",", ""))}
+                price_filter = {"currency": pm.group(1).upper(), "max_amount": float(pm.group(2).replace(",", ""))}
                 continue
 
             # Weight: "8kg", "weight 8"
@@ -175,6 +177,7 @@ class SearchFilters:
         styles: list[str] | None = None,
         generics: list[str] | None = None,
         price_max: float | None = None,
+        price_min: float | None = None,
         currency: str = DEFAULT_CURRENCY,
         weight_max: float | None = None,
         limit: int = 3,
@@ -183,9 +186,17 @@ class SearchFilters:
     ) -> "SearchFilters":
         """Build filters from explicit parameters (used by REST endpoint)."""
         price_filter = None
-        price_amount = float(price_max) if price_max is not None else None
-        if price_amount is not None and price_amount > 0 and currency:
-            price_filter = {"currency": currency.upper(), "amount": price_amount}
+        price_max_amount = float(price_max) if price_max is not None else None
+        price_min_amount = float(price_min) if price_min is not None else None
+        if currency and (
+            (price_max_amount is not None and price_max_amount > 0)
+            or (price_min_amount is not None and price_min_amount > 0)
+        ):
+            price_filter = {"currency": currency.upper()}
+            if price_max_amount is not None and price_max_amount > 0:
+                price_filter["max_amount"] = price_max_amount
+            if price_min_amount is not None and price_min_amount > 0:
+                price_filter["min_amount"] = price_min_amount
         weight_filter = float(weight_max) if weight_max is not None else None
         if weight_filter is not None and weight_filter <= 0:
             weight_filter = None
@@ -220,7 +231,8 @@ class SearchFilters:
         parts = list(self.colors) + list(self.sizes) + list(self.materials) + \
                 list(self.constructions) + list(self.styles) + list(self.generics)
         if self.price_filter:
-            parts.append(f"{self.price_filter['currency']} {self.price_filter['amount']}")
+            amount = self.price_filter.get("max_amount") or self.price_filter.get("amount") or self.price_filter.get("min_amount")
+            parts.append(f"{self.price_filter['currency']} {amount}")
         return "&".join(p for p in parts if p)
 
     def has_any_filter(self) -> bool:
@@ -296,7 +308,7 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
                         filters.styles, filters.price_filter, filters.generics,
                         sku_filter, filters.shapes, filters.exclude_keys,
                     )
-                    found = list(products_collection.find(q, {"_id": 0}).limit(200))
+                    found = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
                     if found:
                         results.extend(found)
                         logger.info(f"MongoDB hit: {len(found)} [c={c_field} s={s_field} m={m_field}]")
@@ -313,18 +325,18 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
                          filters.constructions, [], filters.price_filter,
                          filters.generics + filters.styles, color_sku_filter, filters.shapes,
                          filters.exclude_keys)
-        results = list(products_collection.find(q, {"_id": 0}).limit(200))
+        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
         if not results and color_sku_filter:
             q = _build_query(None, query_colors, None, filters.sizes, None, filters.materials,
                              filters.constructions, [], filters.price_filter,
                              filters.generics + filters.styles, [], filters.shapes,
                              filters.exclude_keys)
-            results = list(products_collection.find(q, {"_id": 0}).limit(200))
+            results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
 
     if not results and (filters.price_filter or filters.weight_filter):
         q = _build_query(None, [], None, [], None, [], [], [], filters.price_filter, [], [],
                          filters.shapes, filters.exclude_keys)
-        results = list(products_collection.find(q, {"_id": 0}).limit(200))
+        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
 
     if not results and filters.generics and any([
         filters.colors,
@@ -342,19 +354,19 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
             filters.constructions, filters.styles, filters.price_filter, [],
             color_sku_filter, filters.shapes, filters.exclude_keys
         )
-        results = list(products_collection.find(q, {"_id": 0}).limit(200))
+        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
         if not results and color_sku_filter:
             q = _build_query(
                 None, query_colors, None, filters.sizes, None, filters.materials,
                 filters.constructions, filters.styles, filters.price_filter, [],
                 [], filters.shapes, filters.exclude_keys
             )
-            results = list(products_collection.find(q, {"_id": 0}).limit(200))
+            results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
 
     if not results and not filters.has_any_filter():
         q = _build_query(None, [], None, [], None, [], [], [], None, [], [], [],
                          filters.exclude_keys)
-        results = list(products_collection.find(q, {"_id": 0}).limit(200))
+        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
 
     if not results:
         return {"error": "No products found."}
@@ -405,6 +417,85 @@ def _extract_colors(text: str) -> tuple[list[str], str]:
     residual = re.sub(r"\b(and|or|with|in|of|for|rug|rugs)\b", " ", residual)
     residual = re.sub(r"\s+", " ", residual).strip()
     return extracted, residual
+
+
+def _currency_from_symbol_or_code(value: str, default_currency: str) -> str:
+    value = (value or "").strip().lower()
+    symbol_map = {"₹": "INR", "$": "USD", "£": "GBP", "€": "EUR"}
+    if value in symbol_map:
+        return symbol_map[value]
+    if value.upper() in CURRENCY_FIELDS:
+        return value.upper()
+    return (default_currency or DEFAULT_CURRENCY).upper()
+
+
+def _price_filter_dict(currency: str, min_amount: float | None = None, max_amount: float | None = None) -> dict | None:
+    result = {"currency": (currency or DEFAULT_CURRENCY).upper()}
+    if min_amount is not None and min_amount > 0:
+        result["min_amount"] = float(min_amount)
+    if max_amount is not None and max_amount > 0:
+        result["max_amount"] = float(max_amount)
+    return result if len(result) > 1 else None
+
+
+def _extract_price_filter(keyword: str, default_currency: str) -> tuple[str, dict | None]:
+    text = keyword or ""
+    lower = text.lower()
+    default_currency = (default_currency or DEFAULT_CURRENCY).upper()
+    price_filter = None
+
+    between_re = re.compile(
+        rf"\b(?:between|from)\s+(?:{PRICE_CURRENCIES_RE}\s*)?{PRICE_AMOUNT_RE}\s+(?:and|to|-)\s+(?:{PRICE_CURRENCIES_RE}\s*)?{PRICE_AMOUNT_RE}\b",
+        re.IGNORECASE,
+    )
+    match = between_re.search(lower)
+    if match:
+        first_currency = _currency_from_symbol_or_code(match.group(1) or "", default_currency)
+        second_currency = _currency_from_symbol_or_code(match.group(3) or "", first_currency)
+        currency = first_currency or second_currency or default_currency
+        min_amount = float(match.group(2).replace(",", ""))
+        max_amount = float(match.group(4).replace(",", ""))
+        if min_amount > max_amount:
+            min_amount, max_amount = max_amount, min_amount
+        price_filter = _price_filter_dict(currency, min_amount=min_amount, max_amount=max_amount)
+        text = between_re.sub(" ", text, count=1)
+        return re.sub(r"\s+", " ", text).strip(), price_filter
+
+    max_re = re.compile(
+        rf"\b(?:under|below|less\s+than|lesser\s+than|up\s+to|upto|within|budget\s+of|maximum|max|cheaper\s+than|less\s+expensive\s+than)\s+(?:{PRICE_CURRENCIES_RE}\s*)?{PRICE_AMOUNT_RE}\b|\b(?:{PRICE_CURRENCIES_RE})\s*{PRICE_AMOUNT_RE}\s*(?:or\s+less|and\s+below|and\s+under)\b",
+        re.IGNORECASE,
+    )
+    match = max_re.search(lower)
+    if match:
+        currency_token = match.group(1) or match.group(3) or ""
+        amount_token = match.group(2) or match.group(4)
+        currency = _currency_from_symbol_or_code(currency_token, default_currency)
+        price_filter = _price_filter_dict(currency, max_amount=float(amount_token.replace(",", "")))
+        text = max_re.sub(" ", text, count=1)
+        return re.sub(r"\s+", " ", text).strip(), price_filter
+
+    min_re = re.compile(
+        rf"\b(?:over|above|more\s+than|greater\s+than|at\s+least|minimum|min|starting\s+from|from)\s+(?:{PRICE_CURRENCIES_RE}\s*)?{PRICE_AMOUNT_RE}\b|\b(?:{PRICE_CURRENCIES_RE})\s*{PRICE_AMOUNT_RE}\s*(?:or\s+more|and\s+above|and\s+over)\b",
+        re.IGNORECASE,
+    )
+    match = min_re.search(lower)
+    if match:
+        currency_token = match.group(1) or match.group(3) or ""
+        amount_token = match.group(2) or match.group(4)
+        currency = _currency_from_symbol_or_code(currency_token, default_currency)
+        price_filter = _price_filter_dict(currency, min_amount=float(amount_token.replace(",", "")))
+        text = min_re.sub(" ", text, count=1)
+        return re.sub(r"\s+", " ", text).strip(), price_filter
+
+    simple_re = re.compile(rf"\b(?:{PRICE_CURRENCIES_RE})\s*{PRICE_AMOUNT_RE}\b", re.IGNORECASE)
+    match = simple_re.search(lower)
+    if match:
+        currency = _currency_from_symbol_or_code(match.group(1), default_currency)
+        price_filter = _price_filter_dict(currency, max_amount=float(match.group(2).replace(",", "")))
+        text = simple_re.sub(" ", text, count=1)
+        return re.sub(r"\s+", " ", text).strip(), price_filter
+
+    return text, None
 
 
 def _resolve_color_sku_scores(colors: list[str], limit: int = 1000) -> tuple[list[str], dict]:
@@ -489,12 +580,22 @@ def _build_query(
     if shapes:
         q["search.shape"] = {"$regex": "|".join(re.escape(s) for s in shapes), "$options": "i"}
     if price_filter:
+        min_amount = price_filter.get("min_amount")
+        max_amount = price_filter.get("max_amount", price_filter.get("amount"))
+        bounds = {"$gt": 0}
+        if min_amount is not None:
+            bounds["$gte"] = min_amount
+        if max_amount is not None:
+            bounds["$lte"] = max_amount
         if price_filter["currency"] == "INR":
-            q["search.price"] = {"$gt": 0, "$lte": price_filter["amount"]}
+            q["search.price"] = bounds
         else:
             field = CURRENCY_FIELDS.get(price_filter["currency"])
             if field:
-                q[f"raw.{field}"] = {"$gt": 0, "$lte": price_filter["amount"]}
+                and_clauses.append({"$or": [
+                    {f"raw.{field}": bounds},
+                    {field: bounds},
+                ]})
     if sku_filter:
         and_clauses.append({"$or": [
             {"raw.SKU": {"$in": sku_filter}}, {"SKU": {"$in": sku_filter}},
@@ -582,10 +683,26 @@ def _format(products: list[dict], currency: str, currency_field: str,
         highest_pct = color_map.get(highest_color, 0.0)
         slug = raw.get("ProductURL") or ""
         barcode = p.get("BarCode") or raw.get("BarCode") or ""
-        display_name = raw.get("Name") or raw.get("Design") or raw.get("Collection") or raw.get("GrColor") or sku
+        display_name = (
+            raw.get("Name") or p.get("Name")
+            or raw.get("Design") or p.get("Design")
+            or raw.get("Collection") or p.get("Collection")
+            or raw.get("GrColor") or p.get("GrColor")
+            or sku
+        )
+        mrp = {
+            "INR": raw.get("INR_MRP") or p.get("INR_MRP"),
+            "USD": raw.get("USD_MRP") or p.get("USD_MRP"),
+            "EUR": raw.get("EUR_MRP") or p.get("EUR_MRP"),
+            "GBP": raw.get("GBP_MRP") or p.get("GBP_MRP"),
+            "AUD": raw.get("AUD_MRP") or p.get("AUD_MRP"),
+            "CHF": raw.get("CHF_MRP") or p.get("CHF_MRP"),
+            "SGD": raw.get("SGD_MRP") or p.get("SGD_MRP"),
+            "AED": raw.get("AED_MRP") or p.get("AED_MRP"),
+        }
         out.append({
             "url": f"https://www.jaipurrugs.com/in/rugs/{slug}?barcode={barcode}" if slug else "",
-            "price": {"currency": currency, "amount": raw.get(currency_field)},
+            "price": {"currency": currency, "amount": raw.get(currency_field) or p.get(currency_field)},
             "name": display_name,
             "SKU": sku,
             "barcode": barcode,
@@ -607,11 +724,6 @@ def _format(products: list[dict], currency: str, currency_field: str,
             "room": search.get("room", [r.strip() for r in (raw.get("Room") or "").split(",") if r.strip()]),
             "weight": search.get("weight", raw.get("Weight", 0.0)),
             "image": raw.get("HeadShot", ""),
-            "mrp": {
-                "INR": raw.get("INR_MRP"), "USD": raw.get("USD_MRP"),
-                "EUR": raw.get("EUR_MRP"), "GBP": raw.get("GBP_MRP"),
-                "AUD": raw.get("AUD_MRP"), "CHF": raw.get("CHF_MRP"),
-                "SGD": raw.get("SGD_MRP"), "AED": raw.get("AED_MRP"),
-            },
+            "mrp": mrp,
         })
     return out
