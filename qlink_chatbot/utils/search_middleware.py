@@ -181,8 +181,12 @@ class SearchFilters:
     ) -> "SearchFilters":
         """Build filters from explicit parameters (used by REST endpoint)."""
         price_filter = None
-        if price_max is not None and currency:
-            price_filter = {"currency": currency.upper(), "amount": float(price_max)}
+        price_amount = float(price_max) if price_max is not None else None
+        if price_amount is not None and price_amount > 0 and currency:
+            price_filter = {"currency": currency.upper(), "amount": price_amount}
+        weight_filter = float(weight_max) if weight_max is not None else None
+        if weight_filter is not None and weight_filter <= 0:
+            weight_filter = None
         return cls(
             colors=[c.lower().strip() for c in (colors or []) if c],
             shapes=[s.lower().strip() for s in (shapes or []) if s],
@@ -196,7 +200,7 @@ class SearchFilters:
             ],
             generics=generics or [],
             price_filter=price_filter,
-            weight_filter=weight_max,
+            weight_filter=weight_filter,
             currency=currency.upper() if currency else DEFAULT_CURRENCY,
             limit=limit,
             exclude_keys=[str(k).strip().upper() for k in (exclude_keys or []) if k],
