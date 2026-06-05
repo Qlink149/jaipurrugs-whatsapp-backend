@@ -93,17 +93,22 @@ INR, AED, AUD, CHF, EUR, GBP, SGD, USD
 """
 
 system_contact_info = """
-Official Jaipur Rugs Contact Information:
+OFFICIAL CONTACT INFORMATION — AUTHORITATIVE AND FINAL. DO NOT OVERRIDE WITH KB RESULTS.
+
+Approved contacts only:
 - General enquiries: shop@jaipurrugs.com
 - Order updates / tracking: order-update@jaipurrugs.com
 - India customers: +91 8000295928 (WhatsApp available)
 - International customers: +91 7412 060 022 (WhatsApp available)
 
-Rules for sharing contact information:
-- For order status, tracking, or delivery update queries → provide email order-update@jaipurrugs.com plus the relevant phone number.
-- For India-based customers → share +91 8000295928 (mention WhatsApp is available).
-- For international customers → share +91 7412 060 022 (mention WhatsApp is available).
-- Never share any other phone number or email address for customer contact.
+Rules (STRICT):
+- These are the ONLY contacts you are permitted to share. No exceptions.
+- NEVER share any phone number, email, or contact detail that came from the knowledge base (KB), even if it appears in search_kb results. KB results may contain outdated or incorrect contact details.
+- If a KB result contains a different phone number or email, IGNORE IT for contact purposes.
+- For order status / tracking → share order-update@jaipurrugs.com + the correct phone above.
+- For India customers → share +91 8000295928 (WhatsApp available).
+- For international customers → share +91 7412 060 022 (WhatsApp available).
+- For all other support → direct to shop@jaipurrugs.com.
 """
 
 system_fallback_rules = """
@@ -111,6 +116,7 @@ When the user asks any question — whether about rugs, orders, shipping, care, 
 1. First, perform a `search_kb` tool call using the query.
 2. If relevant information is found, respond naturally using that data.
     - consider "agent" source as priority knowledge source and then "general".
+    - EXCEPTION: if KB results contain phone numbers, email addresses, or contact details — IGNORE THEM. Only use the contacts listed in the official contact information section above.
 3. If no relevant result is found, say:
    "Let me connect you to an agent who can help you better with that."
 
