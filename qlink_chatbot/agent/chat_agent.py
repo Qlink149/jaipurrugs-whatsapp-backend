@@ -193,7 +193,43 @@ def previously_shown_product_keys(previous_searches) -> list[str]:
                 value = product.get(field)
                 if value:
                     keys.append(str(value).strip().upper())
+            url = product.get("url")
+            if url and "barcode=" in url:
+                keys.append(str(url).rsplit("barcode=", 1)[-1].split("&", 1)[0].strip().upper())
     return list(dict.fromkeys(keys))
+
+
+def is_show_more_request(message: str) -> bool:
+    text = (message or "").lower()
+    return bool(re.search(r"\b(show|see|view|browse|search)\s+more\b|\bmore\s+(products|rugs|options)\b", text))
+
+
+def last_product_search_filters(previous_searches) -> dict:
+    if not isinstance(previous_searches, list):
+        return {}
+    for search in reversed(previous_searches):
+        if not isinstance(search, dict):
+            continue
+        filters = search.get("filters")
+        results = search.get("results")
+        if filters and isinstance(results, list) and results:
+            return filters
+    return {}
+
+
+def serialize_search_filters(filters) -> dict:
+    return {
+        "colors": list(filters.colors or []),
+        "shapes": list(filters.shapes or []),
+        "sizes": list(filters.sizes or []),
+        "materials": list(filters.materials or []),
+        "constructions": list(filters.constructions or []),
+        "styles": list(filters.styles or []),
+        "generics": list(filters.generics or []),
+        "price_max": filters.price_filter.get("amount") if filters.price_filter else None,
+        "currency": filters.price_filter.get("currency") if filters.price_filter else filters.currency,
+        "weight_max": filters.weight_filter,
+    }
 
 
 def product_search_label(args: dict) -> str:
@@ -271,6 +307,8 @@ async def chat_agent(
         recent_searches = get_previous_search(session_id=session_id, collection_name=collection_name)
         latest_products_context = format_recent_products_for_ai(recent_searches)
         exclude_product_keys = previously_shown_product_keys(recent_searches)
+        show_more_request = is_show_more_request(user_message)
+        previous_product_filters = last_product_search_filters(recent_searches)
 
         input_list = [
             {"role": "developer", "content": f"Chat history:\n{format_recent_chat_for_ai(chat_history)}"},
@@ -287,6 +325,7 @@ async def chat_agent(
             {"role": "developer", "content": "When `jaipur_rugs_product_search` returns multiple products, include all returned products (up to 3) in the final user-visible response. Do not show only one unless only one was returned."},
             {"role": "developer", "content": "If the user asks price/size/material/weight/link for a previously shown rug, answer ONLY from the 'Latest shown products' context above — do NOT call the search tool again. For currency, use exact mrp values. If a currency value is missing or zero, say it is not listed and provide the INR price instead."},
             {"role": "developer", "content": "If the user asks to show more products or more rugs, call `jaipur_rugs_product_search` again with the same filters or search intent from the prior product request. The backend will exclude products already shown in this session."},
+            {"role": "developer", "content": f"Previous product search filters for show-more requests: {json.dumps(previous_product_filters)}"},
             {"role": "developer", "content": "Only when the response contains actual rug results returned by the `jaipur_rugs_product_search` tool, append this exact line at the very end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'. Do NOT add it for cleaning, care, order, careers, custom rug, or any non-product response."},
             {"role": "user", "content": _user_content(user_message)}
         ]
@@ -320,7 +359,22 @@ async def chat_agent(
                     kw = args.get("keyword", "")
                     resolved_currency = (args.get("currency") or detected_currency or "INR").upper()
 
-                    if any(args.get(f) for f in ("colors","shapes","sizes","materials","constructions","styles","price_max","weight_max")):
+                    if show_more_request and previous_product_filters:
+                        filters = SearchFilters.from_params(
+                            colors=previous_product_filters.get("colors"),
+                            shapes=previous_product_filters.get("shapes"),
+                            sizes=previous_product_filters.get("sizes"),
+                            materials=previous_product_filters.get("materials"),
+                            constructions=previous_product_filters.get("constructions"),
+                            styles=previous_product_filters.get("styles"),
+                            generics=previous_product_filters.get("generics"),
+                            price_max=previous_product_filters.get("price_max"),
+                            currency=(previous_product_filters.get("currency") or resolved_currency),
+                            weight_max=previous_product_filters.get("weight_max"),
+                            exclude_keys=exclude_product_keys,
+                        )
+                        products = await _mw_search(filters, client_ip=client_ip)
+                    elif any(args.get(f) for f in ("colors","shapes","sizes","materials","constructions","styles","price_max","weight_max")):
                         # LLM provided structured params → use middleware directly
                         filters = SearchFilters.from_params(
                             colors=args.get("colors"),
@@ -349,6 +403,7 @@ async def chat_agent(
                         search_label,
                         products,
                         collection_name=collection_name,
+                        filters=serialize_search_filters(filters),
                     )
                     output = json.dumps(products)
 
