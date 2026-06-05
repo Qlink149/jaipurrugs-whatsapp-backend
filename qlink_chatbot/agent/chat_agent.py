@@ -59,7 +59,7 @@ tools = [
                 "constructions": {"type": "array", "items": {"type": "string"}, "description": "Construction type. e.g. ['hand knotted'], ['hand tufted'], ['flat weave']"},
                 "styles":        {"type": "array", "items": {"type": "string"}, "description": "Design style. e.g. ['modern'], ['traditional'], ['bohemian']"},
                 "price_max":     {"type": "number", "description": "Maximum price budget (in the currency field below)."},
-                "currency":      {"type": "string", "description": "Currency code for price_max. One of: INR, USD, EUR, GBP, AUD, CHF, SGD, AED. Default INR."},
+                "currency":      {"type": "string", "description": "Currency for displaying prices AND for price_max filtering. Always set this when the user asks to see prices in a specific currency — even if there is no price budget. One of: INR, USD, EUR, GBP, AUD, CHF, SGD, AED. Defaults to the user's local currency."},
                 "weight_max":    {"type": "number", "description": "Maximum weight in kg. e.g. 8 means 'under 8kg'."},
                 "keyword":       {"type": "string", "description": "Free-text fallback only when none of the above fields apply. e.g. a collection name or design code."}
             },
@@ -330,6 +330,7 @@ async def chat_agent(
             {"role": "developer", "content": f"Current date and time: {_ist_time_str}"},
             {"role": "developer", "content": f"users country code: {country_code}"},
             {"role": "developer", "content": f"User's detected local currency: {detected_currency or 'INR'}. Show product prices in this currency by default unless the user explicitly asks for a different one."},
+            {"role": "developer", "content": "If the user explicitly asks to see prices in a different currency (e.g. 'show in USD', 'convert to dollars', 'price in AED'), always call `jaipur_rugs_product_search` again with the currency field set to that currency code — even if products were already shown."},
             {
                 "role": "developer",
                 "content": f"user name: {user_name(session_id=session_id, collection_name=collection_name)}",
@@ -337,7 +338,7 @@ async def chat_agent(
             {"role": "developer", "content": "Never produce filler text like 'searching...' or 'one moment please'. If a tool is needed, directly call the tool without any extra wording."},
             {"role": "developer", "content": "When responding: do not add any narrative, status updates, waiting messages, politeness fillers, or redundant sentences. Either answer directly or call a tool directly."},
             {"role": "developer", "content": "When `jaipur_rugs_product_search` returns multiple products, include all returned products (up to 3) in the final user-visible response. Do not show only one unless only one was returned."},
-            {"role": "developer", "content": "If the user asks price/size/material/weight/link for a previously shown rug, answer ONLY from the 'Latest shown products' context above — do NOT call the search tool again. For currency, use exact mrp values. If a currency value is missing or zero, say it is not listed and provide the INR price instead."},
+            {"role": "developer", "content": "If the user asks price/size/material/weight/link for a previously shown rug, answer from the 'Latest shown products' context above — do NOT call the search tool again. For currency, use the exact mrp value for that currency (e.g. mrp.USD for USD). If a currency value is missing or zero, say it is not listed and provide the INR price instead. EXCEPTION: if the user explicitly asks to see prices in a different currency than currently shown, call `jaipur_rugs_product_search` with that currency to fetch updated prices."},
             {"role": "developer", "content": "If the user asks to show more products or more rugs, call `jaipur_rugs_product_search` again with the same filters or search intent from the prior product request. The backend will exclude products already shown in this session."},
             {"role": "developer", "content": f"Previous product search filters for show-more requests: {json.dumps(previous_product_filters)}"},
             {"role": "developer", "content": "Only when the response contains actual rug results returned by the `jaipur_rugs_product_search` tool, append this exact line at the very end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'. Do NOT add it for cleaning, care, order, careers, custom rug, or any non-product response."},
