@@ -7,13 +7,12 @@ from qlink_chatbot.utils.logger_config import logger
 
 _BASE = "https://webapi.jaipurrugs.com/api"
 
-_CREDS = {
-    "username": os.environ["JR_API_USERNAME"],
-    "password": os.environ["JR_API_PASSWORD"],
-    "client_id": os.environ["JR_API_CLIENT_ID"],
-    "client_secret": os.environ["JR_API_CLIENT_SECRET"],
-    "grant_type": "password",
-}
+_CRED_ENV_KEYS = (
+    "JR_API_USERNAME",
+    "JR_API_PASSWORD",
+    "JR_API_CLIENT_ID",
+    "JR_API_CLIENT_SECRET",
+)
 
 _token_cache: dict = {"token": "", "expires_at": 0.0}
 
@@ -24,8 +23,20 @@ async def _get_token(force_refresh: bool = False) -> str:
     if not force_refresh and _token_cache["token"] and now < _token_cache["expires_at"]:
         return _token_cache["token"]
 
+    missing = [key for key in _CRED_ENV_KEYS if not os.getenv(key)]
+    if missing:
+        raise RuntimeError(f"JR API credentials are not configured: {', '.join(missing)}")
+
+    creds = {
+        "username": os.getenv("JR_API_USERNAME"),
+        "password": os.getenv("JR_API_PASSWORD"),
+        "client_id": os.getenv("JR_API_CLIENT_ID"),
+        "client_secret": os.getenv("JR_API_CLIENT_SECRET"),
+        "grant_type": "password",
+    }
+
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(f"{_BASE}/oauth/access_token", json=_CREDS)
+        resp = await client.post(f"{_BASE}/oauth/access_token", json=creds)
         resp.raise_for_status()
         data = resp.json()
 
