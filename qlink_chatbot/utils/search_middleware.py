@@ -257,6 +257,7 @@ async def search(filters: SearchFilters, client_ip: str = "") -> list[dict]:
 # ── MongoDB search ────────────────────────────────────────────────────────────
 
 async def _mongo_search(filters: SearchFilters, currency: str, currency_field: str) -> list[dict]:
+    fetch_limit = max(filters.limit * 8, 24)
     color_sku_filter: list[str] = []
     color_sku_scores: dict = {}
     query_colors = filters.colors[:]
@@ -296,7 +297,7 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
                         filters.styles, filters.price_filter, filters.generics,
                         sku_filter, filters.shapes, filters.exclude_keys,
                     )
-                    found = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
+                    found = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(fetch_limit))
                     if found:
                         results.extend(found)
                         logger.info(f"MongoDB hit: {len(found)} [c={c_field} s={s_field} m={m_field}]")
@@ -313,18 +314,18 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
                          filters.constructions, [], filters.price_filter,
                          filters.generics + filters.styles, color_sku_filter, filters.shapes,
                          filters.exclude_keys)
-        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
+        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(fetch_limit))
         if not results and color_sku_filter:
             q = _build_query(None, query_colors, None, filters.sizes, None, filters.materials,
                              filters.constructions, [], filters.price_filter,
                              filters.generics + filters.styles, [], filters.shapes,
                              filters.exclude_keys)
-            results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
+            results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(fetch_limit))
 
     if not results and (filters.price_filter or filters.weight_filter):
         q = _build_query(None, [], None, [], None, [], [], [], filters.price_filter, [], [],
                          filters.shapes, filters.exclude_keys)
-        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
+        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(fetch_limit))
 
     if not results and filters.generics and any([
         filters.colors,
@@ -342,19 +343,19 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
             filters.constructions, filters.styles, filters.price_filter, [],
             color_sku_filter, filters.shapes, filters.exclude_keys
         )
-        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
+        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(fetch_limit))
         if not results and color_sku_filter:
             q = _build_query(
                 None, query_colors, None, filters.sizes, None, filters.materials,
                 filters.constructions, filters.styles, filters.price_filter, [],
                 [], filters.shapes, filters.exclude_keys
             )
-            results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
+            results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(fetch_limit))
 
     if not results and not filters.has_any_filter():
         q = _build_query(None, [], None, [], None, [], [], [], None, [], [], [],
                          filters.exclude_keys)
-        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
+        results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(fetch_limit))
 
     if not results:
         return {"error": "No products found."}
@@ -407,7 +408,7 @@ def _extract_colors(text: str) -> tuple[list[str], str]:
     return extracted, residual
 
 
-def _resolve_color_sku_scores(colors: list[str], limit: int = 1000) -> tuple[list[str], dict]:
+def _resolve_color_sku_scores(colors: list[str], limit: int = 80) -> tuple[list[str], dict]:
     if not colors:
         return [], {}
     pattern = "|".join(
