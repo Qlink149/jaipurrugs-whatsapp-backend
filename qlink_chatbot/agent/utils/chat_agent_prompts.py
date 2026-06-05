@@ -198,17 +198,20 @@ def build_system_prompt(
     system_image_rules: str = system_image_rules,
 ) -> str:
     """Combines all system prompt sections into one final prompt string."""
+    def _s(val):
+        return (val or "").strip()
+
     sections = [
-        system_identity.strip(),
-        system_goals.strip(),
-        system_conversation_style.strip(),
-        system_product_display_format.strip(),
-        system_tool_rules.strip(),
-        system_contact_info.strip(),
-        system_fallback_rules.strip(),
-        system_data_source_rule.strip(),
-        system_agent_handoff_rules.strip(),
-        system_image_rules.strip(),
-        system_others.strip(),
+        _s(system_identity),
+        _s(system_goals),
+        _s(system_conversation_style),
+        _s(system_product_display_format),
+        _s(system_tool_rules),
+        _s(system_contact_info),
+        _s(system_fallback_rules),
+        _s(system_data_source_rule),
+        _s(system_agent_handoff_rules),
+        _s(system_image_rules),
+        _s(system_others),
     ]
     return "\n\n".join(s for s in sections if s)
