@@ -12,7 +12,7 @@ from qlink_chatbot.database.mongo_utils import (
     save_user_name,
     whatsapp_status_events_collection,
 )
-from qlink_chatbot.utils.geo_utils import currency_for_country
+from qlink_chatbot.utils.geo_utils import country_code_for_phone, currency_for_country
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_responses
 from qlink_chatbot.whatsapp_functions.send_typing_indicator import (
@@ -307,11 +307,12 @@ async def _process_message(request_data: dict) -> None:
         session = get_session_by_id(session_id=session_id,
                                     collection_name=WHATSAPP_COLLECTION_NAME)
 
+        phone_country_code = country_code_for_phone(phone_number)
         if not session:
-            create_session(session_id=session_id, country_code="",
+            create_session(session_id=session_id, country_code=phone_country_code,
                            name=whatsapp_username, is_ai=True,
                            collection_name=WHATSAPP_COLLECTION_NAME)
-            session = {"chat_history": [], "country_code": ""}
+            session = {"chat_history": [], "country_code": phone_country_code}
         elif whatsapp_username and whatsapp_username != session.get("user_name", ""):
             save_user_name(session_id=session_id, name=whatsapp_username,
                            collection_name=WHATSAPP_COLLECTION_NAME)
@@ -326,13 +327,13 @@ async def _process_message(request_data: dict) -> None:
 
         stop_typing = asyncio.Event()
         typing_task = asyncio.create_task(typing_indicator_loop(message_id, stop_typing))
-        detected_currency = currency_for_country(session.get("country_code", ""))
+        detected_currency = currency_for_country(session.get("country_code", "") or phone_number)
         try:
             bot_text = await chat_agent(
                 chat_history=session.get("chat_history", []),
                 user_message=user_text,
                 session_id=session_id,
-                country_code=session.get("country_code", ""),
+                country_code=session.get("country_code", "") or phone_country_code,
                 client_ip="",
                 collection_name=WHATSAPP_COLLECTION_NAME,
                 detected_currency=detected_currency,
