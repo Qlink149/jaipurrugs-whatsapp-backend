@@ -220,8 +220,14 @@ async def chat_agent(
         _now_ist = datetime.now(_IST)
         _ist_time_str = _now_ist.strftime("%A, %I:%M %p IST")
 
+        # Fetch and format the latest shown products so the AI can answer
+        # follow-up questions ("the first one", "its price in AED") accurately
+        recent_searches = get_previous_search(session_id=session_id, collection_name=collection_name)
+        latest_products_context = format_recent_products_for_ai(recent_searches)
+
         input_list = [
             {"role": "developer", "content": f"Chat history:\n{format_recent_chat_for_ai(chat_history)}"},
+            {"role": "developer", "content": f"Latest shown products (use these for follow-up questions — 'the first one', 'its price', 'what material is it'): {latest_products_context}"},
             {"role": "developer", "content": f"Current date and time: {_ist_time_str}"},
             {"role": "developer", "content": f"users country code: {country_code}"},
             {"role": "developer", "content": f"User's detected local currency: {detected_currency or 'INR'}. Show product prices in this currency by default unless the user explicitly asks for a different one."},
@@ -232,7 +238,7 @@ async def chat_agent(
             {"role": "developer", "content": "Never produce filler text like 'searching...' or 'one moment please'. If a tool is needed, directly call the tool without any extra wording."},
             {"role": "developer", "content": "When responding: do not add any narrative, status updates, waiting messages, politeness fillers, or redundant sentences. Either answer directly or call a tool directly."},
             {"role": "developer", "content": "When `jaipur_rugs_product_search` returns multiple products, include all returned products (up to 3) in the final user-visible response. Do not show only one unless only one was returned."},
-            {"role": "developer", "content": "If the user asks price/size/material/weight/link for a previously shown rug, answer from Latest shown products context. For currency requests, use exact values from `mrp` for INR, AED, AUD, CHF, EUR, GBP, SGD, USD. Do not convert between currencies, do not estimate, and do not use exchange rates. If requested currency value is missing, clearly say it is unavailable."},
+            {"role": "developer", "content": "If the user asks price/size/material/weight/link for a previously shown rug, answer ONLY from the 'Latest shown products' context above — do NOT call the search tool again. For currency, use exact mrp values. If a currency value is missing or zero, say it is not listed and provide the INR price instead."},
             {"role": "developer", "content": "Only when the response contains actual rug results returned by the `jaipur_rugs_product_search` tool, append this exact line at the very end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'. Do NOT add it for cleaning, care, order, careers, custom rug, or any non-product response."},
             {"role": "user", "content": _user_content(user_message)}
         ]
