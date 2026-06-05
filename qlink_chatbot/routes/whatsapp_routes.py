@@ -12,6 +12,7 @@ from qlink_chatbot.database.mongo_utils import (
     save_user_name,
     whatsapp_status_events_collection,
 )
+from qlink_chatbot.utils.geo_utils import currency_for_country
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.whatsapp_functions.dispatch import dispatch_whatsapp_responses
 from qlink_chatbot.whatsapp_functions.send_typing_indicator import (
@@ -309,6 +310,7 @@ async def _process_message(request_data: dict) -> None:
 
         stop_typing = asyncio.Event()
         typing_task = asyncio.create_task(typing_indicator_loop(message_id, stop_typing))
+        detected_currency = currency_for_country(session.get("country_code", ""))
         try:
             bot_text = await chat_agent(
                 chat_history=session.get("chat_history", []),
@@ -317,6 +319,7 @@ async def _process_message(request_data: dict) -> None:
                 country_code=session.get("country_code", ""),
                 client_ip="",
                 collection_name=WHATSAPP_COLLECTION_NAME,
+                detected_currency=detected_currency,
             )
         finally:
             stop_typing.set()
