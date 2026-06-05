@@ -25,9 +25,8 @@ WHATSAPP_COLLECTION_NAME = "users_whatsapp"
 _IMAGE_NOT_SUPPORTED_RESPONSE = (
     "I'm sorry, I'm not able to identify or process images at this time.\n\n"
     "For assistance, please reach out to us:\n"
-    "- Email: shop@jaipurrugs.com\n"
-    "- India: +91 8000295928 (WhatsApp available)\n"
-    "- International: +91 7412 060 022 (WhatsApp available)"
+    "- After-sales/orders: order-update@jaipurrugs.com, +91 7665017083\n"
+    "- Rug care/repair/washing/services: rugcare@jaipurrugs.com, +91 9039195506"
 )
 _MEDIA_SENTINEL = "__MEDIA_MESSAGE__"
 

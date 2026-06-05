@@ -16,7 +16,6 @@ from qlink_chatbot.database.mongo_utils import (
     user_name,
 )
 from qlink_chatbot.database.pinecone_utils import fetch_similar_sessions
-from qlink_chatbot.utils.jaipur_rugs_api import jaipur_rugs_product_search
 from qlink_chatbot.utils.logger_config import logger
 
 API_KEY = os.getenv("OPENAI_API_KEY")
@@ -178,6 +177,39 @@ def format_recent_products_for_ai(previous_searches, max_products: int = 3) -> s
 
     return json.dumps(compact_products)
 
+
+def previously_shown_product_keys(previous_searches) -> list[str]:
+    """Return SKU/BarCode keys already shown in this session."""
+    keys = []
+    if not isinstance(previous_searches, list):
+        return keys
+    for search in previous_searches:
+        if not isinstance(search, dict):
+            continue
+        for product in search.get("results", []) or []:
+            if not isinstance(product, dict):
+                continue
+            for field in ("SKU", "sku", "BarCode", "barcode"):
+                value = product.get(field)
+                if value:
+                    keys.append(str(value).strip().upper())
+    return list(dict.fromkeys(keys))
+
+
+def product_search_label(args: dict) -> str:
+    parts = []
+    for field in ("colors", "shapes", "sizes", "materials", "constructions", "styles"):
+        values = args.get(field) or []
+        if values:
+            parts.extend(str(value).strip() for value in values if value)
+    if args.get("price_max"):
+        parts.append(f"{args.get('currency') or 'INR'} {args.get('price_max')}")
+    if args.get("weight_max"):
+        parts.append(f"{args.get('weight_max')}kg")
+    if args.get("keyword"):
+        parts.append(str(args.get("keyword")).strip())
+    return " & ".join(part for part in parts if part) or "search"
+
 def agent_alert_tool(alert, sesson_id):
     """Tool function to raise an agent alert"""
     try:
@@ -224,6 +256,7 @@ async def chat_agent(
         # follow-up questions ("the first one", "its price in AED") accurately
         recent_searches = get_previous_search(session_id=session_id, collection_name=collection_name)
         latest_products_context = format_recent_products_for_ai(recent_searches)
+        exclude_product_keys = previously_shown_product_keys(recent_searches)
 
         input_list = [
             {"role": "developer", "content": f"Chat history:\n{format_recent_chat_for_ai(chat_history)}"},
@@ -239,6 +272,7 @@ async def chat_agent(
             {"role": "developer", "content": "When responding: do not add any narrative, status updates, waiting messages, politeness fillers, or redundant sentences. Either answer directly or call a tool directly."},
             {"role": "developer", "content": "When `jaipur_rugs_product_search` returns multiple products, include all returned products (up to 3) in the final user-visible response. Do not show only one unless only one was returned."},
             {"role": "developer", "content": "If the user asks price/size/material/weight/link for a previously shown rug, answer ONLY from the 'Latest shown products' context above — do NOT call the search tool again. For currency, use exact mrp values. If a currency value is missing or zero, say it is not listed and provide the INR price instead."},
+            {"role": "developer", "content": "If the user asks to show more products or more rugs, call `jaipur_rugs_product_search` again with the same filters or search intent from the prior product request. The backend will exclude products already shown in this session."},
             {"role": "developer", "content": "Only when the response contains actual rug results returned by the `jaipur_rugs_product_search` tool, append this exact line at the very end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'. Do NOT add it for cleaning, care, order, careers, custom rug, or any non-product response."},
             {"role": "user", "content": _user_content(user_message)}
         ]
@@ -284,6 +318,7 @@ async def chat_agent(
                             price_max=args.get("price_max"),
                             currency=resolved_currency,
                             weight_max=args.get("weight_max"),
+                            exclude_keys=exclude_product_keys,
                         )
                         if kw:  # merge any free-text keyword into generics
                             kw_filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
@@ -291,8 +326,10 @@ async def chat_agent(
                         products = await _mw_search(filters, client_ip=client_ip)
                     else:
                         # Fallback: LLM used old keyword-only style
-                        products = await jaipur_rugs_product_search(kw, client_ip=client_ip, country_code=country_code, currency=resolved_currency)
-                    search_label = kw or str(args.get("colors", args.get("materials", args.get("shapes", "search"))))
+                        filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
+                        filters.exclude_keys = exclude_product_keys
+                        products = await _mw_search(filters, client_ip=client_ip)
+                    search_label = product_search_label(args)
                     save_previous_search(
                         session_id,
                         search_label,

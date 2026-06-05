@@ -13,7 +13,6 @@ import re
 from dataclasses import dataclass, field
 
 from qlink_chatbot.database.mongo_utils import db
-from qlink_chatbot.utils.jr_api_client import search_products as _jr_search
 from qlink_chatbot.utils.logger_config import logger
 
 products_collection = db["products"]
@@ -75,6 +74,7 @@ class SearchFilters:
     weight_filter: float | None = None
     currency: str = DEFAULT_CURRENCY
     limit: int = 3
+    exclude_keys: list[str] = field(default_factory=list)
 
     # ── Constructors ─────────────────────────────────────────────────────────
 
@@ -176,6 +176,7 @@ class SearchFilters:
         currency: str = DEFAULT_CURRENCY,
         weight_max: float | None = None,
         limit: int = 3,
+        exclude_keys: list[str] | None = None,
     ) -> "SearchFilters":
         """Build filters from explicit parameters (used by REST endpoint)."""
         price_filter = None
@@ -193,19 +194,14 @@ class SearchFilters:
             weight_filter=weight_max,
             currency=currency.upper() if currency else DEFAULT_CURRENCY,
             limit=limit,
+            exclude_keys=[str(k).strip().upper() for k in (exclude_keys or []) if k],
         )
 
     # ── Routing decision ─────────────────────────────────────────────────────
 
     def needs_mongodb(self) -> bool:
-        """True when the query is too complex for the JR keyword search API."""
-        return any([
-            bool(self.shapes),               # JR API can't filter by shape
-            bool(self.price_filter),         # JR API has no price range support
-            self.weight_filter is not None,  # JR API has no weight filter
-            len(self.colors) > 1,            # Multi-color needs color-% scoring
-            bool(self.sizes) and bool(self.colors),  # Size+color better in MongoDB
-        ])
+        """All chat product searches use the synced MongoDB catalog."""
+        return True
 
     def to_jr_keyword(self) -> str:
         """Reconstruct a keyword string for the JR Search API."""
@@ -237,26 +233,8 @@ async def search(filters: SearchFilters, client_ip: str = "") -> list[dict]:
             currency = await _resolve_currency_from_ip(client_ip)
         currency_field = CURRENCY_FIELDS.get(currency, "INR_MRP")
 
-        # ── Route: JR Search API ──────────────────────────────────────────────
-        if not filters.needs_mongodb():
-            jr_keyword = filters.to_jr_keyword()
-            if jr_keyword:
-                try:
-                    jr_results = await _jr_search(jr_keyword)
-                    if jr_results:
-                        logger.info(f"Middleware→JR API: {len(jr_results)} results for '{jr_keyword}'")
-                        color_sku_scores: dict = {}
-                        if filters.colors:
-                            _, color_sku_scores = _resolve_color_sku_scores(filters.colors)
-                        wrapped = [{"raw": p} for p in jr_results]
-                        unique = _dedupe_by_sku(wrapped)
-                        selected = unique[:filters.limit]
-                        return _format(selected, currency, currency_field, filters.colors, color_sku_scores)
-                except Exception as e:
-                    logger.warning(f"Middleware→JR API failed ({e}), falling back to MongoDB")
-
         # ── Route: MongoDB ────────────────────────────────────────────────────
-        logger.info(f"Middleware→MongoDB: colors={filters.colors} shapes={filters.shapes} sizes={filters.sizes} constructions={filters.constructions}")
+        logger.info(f"Middleware->MongoDB: colors={filters.colors} shapes={filters.shapes} sizes={filters.sizes} constructions={filters.constructions}")
         return await _mongo_search(filters, currency, currency_field)
 
     except Exception as e:
@@ -304,7 +282,7 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
                         c_field, query_colors, s_field, filters.sizes,
                         m_field, filters.materials, filters.constructions,
                         filters.styles, filters.price_filter, filters.generics,
-                        sku_filter, filters.shapes,
+                        sku_filter, filters.shapes, filters.exclude_keys,
                     )
                     found = list(products_collection.find(q, {"_id": 0}).limit(200))
                     if found:
@@ -321,20 +299,25 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
     if not results and filters.styles:
         q = _build_query(None, query_colors, None, filters.sizes, None, filters.materials,
                          filters.constructions, [], filters.price_filter,
-                         filters.generics + filters.styles, color_sku_filter, filters.shapes)
+                         filters.generics + filters.styles, color_sku_filter, filters.shapes,
+                         filters.exclude_keys)
         results = list(products_collection.find(q, {"_id": 0}).limit(200))
         if not results and color_sku_filter:
             q = _build_query(None, query_colors, None, filters.sizes, None, filters.materials,
                              filters.constructions, [], filters.price_filter,
-                             filters.generics + filters.styles, [], filters.shapes)
+                             filters.generics + filters.styles, [], filters.shapes,
+                             filters.exclude_keys)
             results = list(products_collection.find(q, {"_id": 0}).limit(200))
 
     if not results and (filters.price_filter or filters.weight_filter):
-        q = _build_query(None, [], None, [], None, [], [], [], filters.price_filter, [], [], filters.shapes)
+        q = _build_query(None, [], None, [], None, [], [], [], filters.price_filter, [], [],
+                         filters.shapes, filters.exclude_keys)
         results = list(products_collection.find(q, {"_id": 0}).limit(200))
 
     if not results and not filters.has_any_filter():
-        results = list(products_collection.find({"flags.inStock": True}, {"_id": 0}).limit(200))
+        q = _build_query(None, [], None, [], None, [], [], [], None, [], [], [],
+                         filters.exclude_keys)
+        results = list(products_collection.find(q, {"_id": 0}).limit(200))
 
     if not results:
         return {"error": "No products found."}
@@ -431,10 +414,21 @@ def _color_match(color_text: str, requested: str) -> bool:
 
 def _build_query(
     color_field, colors, size_field, sizes, material_field, materials,
-    constructions, styles, price_filter, generics, sku_filter, shapes,
+    constructions, styles, price_filter, generics, sku_filter, shapes, exclude_keys=None,
 ) -> dict:
     q: dict = {"flags.inStock": True}
     and_clauses = []
+
+    exclude_keys = [str(k).strip().upper() for k in (exclude_keys or []) if k]
+    if exclude_keys:
+        and_clauses.append({
+            "$and": [
+                {"SKU": {"$nin": exclude_keys}},
+                {"BarCode": {"$nin": exclude_keys}},
+                {"raw.SKU": {"$nin": exclude_keys}},
+                {"raw.BarCode": {"$nin": exclude_keys}},
+            ]
+        })
 
     if color_field and colors:
         q[color_field] = {"$regex": "|".join(re.escape(c) for c in colors), "$options": "i"}
