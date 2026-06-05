@@ -313,6 +313,31 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
                          filters.shapes, filters.exclude_keys)
         results = list(products_collection.find(q, {"_id": 0}).limit(200))
 
+    if not results and filters.generics and any([
+        filters.colors,
+        filters.shapes,
+        filters.sizes,
+        filters.materials,
+        filters.constructions,
+        filters.styles,
+        filters.price_filter,
+        filters.weight_filter,
+    ]):
+        logger.info(f"Retrying MongoDB search without generic terms: {filters.generics}")
+        q = _build_query(
+            None, query_colors, None, filters.sizes, None, filters.materials,
+            filters.constructions, filters.styles, filters.price_filter, [],
+            color_sku_filter, filters.shapes, filters.exclude_keys
+        )
+        results = list(products_collection.find(q, {"_id": 0}).limit(200))
+        if not results and color_sku_filter:
+            q = _build_query(
+                None, query_colors, None, filters.sizes, None, filters.materials,
+                filters.constructions, filters.styles, filters.price_filter, [],
+                [], filters.shapes, filters.exclude_keys
+            )
+            results = list(products_collection.find(q, {"_id": 0}).limit(200))
+
     if not results and not filters.has_any_filter():
         q = _build_query(None, [], None, [], None, [], [], [], None, [], [], [],
                          filters.exclude_keys)
