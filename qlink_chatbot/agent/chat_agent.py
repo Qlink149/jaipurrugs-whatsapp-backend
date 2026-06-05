@@ -326,37 +326,6 @@ async def chat_agent(
         show_more_request = is_show_more_request(user_message)
         previous_product_filters = last_product_search_filters(recent_searches)
 
-        show_more_prefetch: list | dict | None = None
-        if show_more_request and previous_product_filters:
-            from qlink_chatbot.utils.search_middleware import SearchFilters, search as _mw_search
-
-            prefetch_currency = (
-                previous_product_filters.get("currency") or detected_currency or "INR"
-            ).upper()
-            prefetch_filters = SearchFilters.from_params(
-                colors=previous_product_filters.get("colors"),
-                shapes=previous_product_filters.get("shapes"),
-                sizes=previous_product_filters.get("sizes"),
-                materials=previous_product_filters.get("materials"),
-                constructions=previous_product_filters.get("constructions"),
-                styles=previous_product_filters.get("styles"),
-                generics=previous_product_filters.get("generics"),
-                price_max=previous_product_filters.get("price_max"),
-                currency=prefetch_currency,
-                weight_max=previous_product_filters.get("weight_max"),
-                exclude_keys=exclude_product_keys,
-                exclude_names=exclude_product_names,
-            )
-            show_more_prefetch = await _mw_search(prefetch_filters, client_ip=client_ip)
-            if isinstance(show_more_prefetch, list) and show_more_prefetch:
-                save_previous_search(
-                    session_id,
-                    product_search_label(previous_product_filters),
-                    show_more_prefetch,
-                    collection_name=collection_name,
-                    filters=serialize_search_filters(prefetch_filters),
-                )
-
         input_list = [
             {"role": "developer", "content": f"Chat history:\n{format_recent_chat_for_ai(chat_history)}"},
             {"role": "developer", "content": f"Latest shown products (use these for follow-up questions — 'the first one', 'its price', 'what material is it'): {latest_products_context}"},
@@ -379,27 +348,8 @@ async def chat_agent(
             {"role": "developer", "content": "If the user asks to show more products or more rugs, call `jaipur_rugs_product_search` again with the same filters or search intent from the prior product request. The backend will exclude products already shown in this session."},
             {"role": "developer", "content": f"Previous product search filters for show-more requests: {json.dumps(previous_product_filters)}"},
             {"role": "developer", "content": "Only when the response contains actual rug results returned by the `jaipur_rugs_product_search` tool, append this exact line at the very end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'. Do NOT add it for cleaning, care, order, careers, custom rug, or any non-product response."},
+            {"role": "user", "content": _user_content(user_message)}
         ]
-        if show_more_prefetch is not None:
-            if isinstance(show_more_prefetch, list) and show_more_prefetch:
-                input_list.append({
-                    "role": "developer",
-                    "content": (
-                        "SHOW-MORE PREFETCH RESULTS (display ALL of these NEW products only; "
-                        "do NOT repeat previously shown rugs; do NOT call jaipur_rugs_product_search): "
-                        f"{json.dumps(show_more_prefetch)}"
-                    ),
-                })
-            else:
-                input_list.append({
-                    "role": "developer",
-                    "content": (
-                        "SHOW-MORE PREFETCH: no additional matching products remain. "
-                        "Tell the user politely and suggest broadening their search. "
-                        "Do NOT call jaipur_rugs_product_search and do NOT repeat previously shown rugs."
-                    ),
-                })
-        input_list.append({"role": "user", "content": _user_content(user_message)})
 
 
         # Step 1: Model processes with tools available
@@ -470,7 +420,6 @@ async def chat_agent(
                         # Fallback: LLM used old keyword-only style
                         filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
                         filters.exclude_keys = exclude_product_keys
-                        filters.exclude_names = exclude_product_names
                         products = await _mw_search(filters, client_ip=client_ip)
                     output = json.dumps(products)
                     if isinstance(products, list) and products:
