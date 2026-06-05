@@ -331,6 +331,8 @@ async def chat_agent(
             {"role": "developer", "content": f"users country code: {country_code}"},
             {"role": "developer", "content": f"User's detected local currency: {detected_currency or 'INR'}. Show product prices in this currency by default unless the user explicitly asks for a different one."},
             {"role": "developer", "content": "If the user explicitly asks to see prices in a different currency (e.g. 'show in USD', 'convert to dollars', 'price in AED'), always call `jaipur_rugs_product_search` again with the currency field set to that currency code — even if products were already shown."},
+            {"role": "developer", "content": "When products are returned by `jaipur_rugs_product_search` but a product's price for the requested currency is null or zero: still show ALL returned products. For each product missing that currency price, write 'Price: Not listed in [currency] — INR: ₹[INR_MRP]'. NEVER say 'no products found in [currency]' or 'no rugs listed with [currency] prices' — the products exist, only that currency price may not be listed."},
+            {"role": "developer", "content": "When the user asks to show more products, you MUST call `jaipur_rugs_product_search` — never repeat or re-list products already shown. The backend automatically excludes already-shown products from the new results."},
             {
                 "role": "developer",
                 "content": f"user name: {user_name(session_id=session_id, collection_name=collection_name)}",
@@ -347,11 +349,12 @@ async def chat_agent(
 
 
         # Step 1: Model processes with tools available
+        # Low temperature here for consistent, deterministic tool-call decisions
         response = await client.responses.create(
             model="gpt-4.1-mini",
             tools=tools,
             input=input_list,
-            temperature=0.7,
+            temperature=0.2,
             instructions=system_prompt,
             max_output_tokens=2048,
             text=output_schema,
