@@ -508,4 +508,4 @@ async def chat_agent(
                 "session_id": session_id
             }
         )
-        raise e
+        return "I'm sorry, I ran into an issue processing your request. Could you please try again?"

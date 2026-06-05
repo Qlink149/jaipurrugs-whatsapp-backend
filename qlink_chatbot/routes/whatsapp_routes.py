@@ -361,7 +361,7 @@ async def _process_message(request_data: dict) -> None:
             try:
                 dispatch_whatsapp_responses(
                     phone_number=phone_number,
-                    bot_responses=[{"type": "text", "text": "Unexpected error occurred."}],
+                    bot_responses=[{"type": "text", "text": "Sorry, something went wrong on our end. Please try again in a moment."}],
                 )
             except Exception as send_error:
                 logger.error("Failed to send fallback message",
