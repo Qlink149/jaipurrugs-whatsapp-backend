@@ -606,7 +606,11 @@ def _build_query(
         if max_amount is not None:
             bounds["$lte"] = max_amount
         if price_filter["currency"] == "INR":
-            q["search.price"] = bounds
+            and_clauses.append({"$or": [
+                {"search.price": bounds},
+                {"raw.INR_MRP": bounds},
+                {"INR_MRP": bounds},
+            ]})
         else:
             field = CURRENCY_FIELDS.get(price_filter["currency"])
             if field:
