@@ -377,6 +377,14 @@ def product_price_line(product: dict, currency: str) -> str:
     return f"Price: Not listed in {currency}"
 
 
+def product_title_line(product: dict) -> str:
+    title = str(product.get("name") or product.get("SKU") or "Jaipur Rugs Product").strip()
+    collection = str(product.get("collection") or "").strip()
+    if collection and collection.lower() not in title.lower():
+        title = f"{title} ({collection})"
+    return title
+
+
 def format_product_results(products: list[dict], currency: str, user_display_name: str = "", more: bool = False) -> str:
     # Only show products that have a displayable price in the requested currency
     priced = [
@@ -388,11 +396,9 @@ def format_product_results(products: list[dict], currency: str, user_display_nam
     if not priced:
         return "I couldn't find matching rugs right now."
 
-    name_part = f", {user_display_name}" if user_display_name else ""
-    intro = f"Here are more rugs for you{name_part}:" if more else f"Here are some beautiful rugs for you{name_part}:"
-    blocks = [intro]
+    blocks = []
     for index, product in enumerate(priced[:3], start=1):
-        title = product.get("name") or product.get("SKU") or "Jaipur Rugs Product"
+        title = product_title_line(product)
         lines = [
             f"{index}. **{title}**",
             f"- Size: {product.get('size') or 'Not listed'}",
@@ -425,6 +431,15 @@ def merge_keyword_filters(filters, keyword_filters) -> None:
         filters.price_filter = keyword_filters.price_filter
     if filters.weight_filter is None and keyword_filters.weight_filter is not None:
         filters.weight_filter = keyword_filters.weight_filter
+
+
+def merge_price_filters(filters, keyword_filters) -> None:
+    if not filters.price_filter and keyword_filters.price_filter:
+        filters.price_filter = keyword_filters.price_filter
+        filters.currency = keyword_filters.price_filter.get("currency", filters.currency)
+    if filters.weight_filter is None and keyword_filters.weight_filter is not None:
+        filters.weight_filter = keyword_filters.weight_filter
+
 
 def agent_alert_tool(alert, sesson_id):
     """Tool function to raise an agent alert"""
@@ -608,7 +623,8 @@ async def chat_agent(
                 if item.name == "jaipur_rugs_product_search":
                     from qlink_chatbot.utils.search_middleware import SearchFilters, search as _mw_search
                     kw = args.get("keyword", "")
-                    resolved_currency = (args.get("currency") or detected_currency or "INR").upper()
+                    resolved_currency = (args.get("currency") or requested_currency or detected_currency or "INR").upper()
+                    message_filters = SearchFilters.from_keyword(user_message, currency=resolved_currency)
 
                     if show_more_request and previous_product_filters:
                         filters = SearchFilters.from_params(
@@ -643,14 +659,16 @@ async def chat_agent(
                             exclude_keys=exclude_product_keys,
                             exclude_names=exclude_product_names,
                         )
+                        merge_price_filters(filters, message_filters)
                         if kw:  # merge any free-text keyword into generics
                             kw_filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
                             merge_keyword_filters(filters, kw_filters)
                         products = await _mw_search(filters, client_ip=client_ip)
                     else:
                         # Fallback: LLM used old keyword-only style
-                        filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
+                        filters = SearchFilters.from_keyword(kw or user_message, currency=resolved_currency)
                         filters.exclude_keys = exclude_product_keys
+                        filters.exclude_names = exclude_product_names
                         products = await _mw_search(filters, client_ip=client_ip)
                     if isinstance(products, list) and products:
                         search_label = product_search_label(args)

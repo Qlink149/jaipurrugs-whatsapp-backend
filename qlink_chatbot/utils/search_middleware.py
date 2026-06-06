@@ -149,6 +149,7 @@ class SearchFilters:
                     matched_shape = True
                     break
 
+            lower = _clean_generic_phrase(lower)
             if lower:
                 generics.append(lower)
 
@@ -501,6 +502,17 @@ def _extract_price_filter(keyword: str, default_currency: str) -> tuple[str, dic
     return text, None
 
 
+def _clean_generic_phrase(value: str) -> str:
+    text = str(value or "").lower()
+    text = re.sub(
+        r"\b(show\s+me|show|find|search|give\s+me|i\s+want|i\s+need|please|rug|rugs|carpet|carpets|products|options)\b",
+        " ",
+        text,
+    )
+    text = re.sub(r"\b(inr|usd|eur|gbp|aud|chf|sgd|aed|rupees?|dollars?|pounds?|euros?|dirhams?)\b", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _resolve_color_sku_scores(colors: list[str], limit: int = 1000) -> tuple[list[str], dict]:
     if not colors:
         return [], {}
@@ -717,6 +729,7 @@ def _format(products: list[dict], currency: str, currency_field: str,
             "name": display_name,
             "SKU": sku,
             "barcode": barcode,
+            "collection": raw.get("Collection") or p.get("Collection") or "",
             "size": size.get("exact", raw.get("SizeInFT", "")),
             "shape": search.get("shape", raw.get("Shape", "")),
             "color": color.get("single", raw.get("GrColor", "")),
