@@ -10,12 +10,14 @@ They never need to know which data source answered.
 """
 import re
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 from qlink_chatbot.database.mongo_utils import db
 from qlink_chatbot.utils.logger_config import logger
 
 products_collection = db["products"]
 product_color_collection = db["product_color"]
+JR_BASE_URL = "https://www.jaipurrugs.com"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -673,6 +675,27 @@ def _weight_ok(weight, ceiling: float) -> bool:
         return True
 
 
+def _product_url(product_url: str, barcode: str) -> str:
+    slug_or_url = str(product_url or "").strip()
+    barcode = str(barcode or "").strip()
+    if not slug_or_url:
+        return ""
+
+    if slug_or_url.startswith("http://") or slug_or_url.startswith("https://"):
+        url = slug_or_url
+    elif slug_or_url.startswith("/"):
+        url = f"{JR_BASE_URL}{slug_or_url}"
+    elif slug_or_url.startswith("in/rugs/") or slug_or_url.startswith("rugs/"):
+        url = f"{JR_BASE_URL}/{slug_or_url}"
+    else:
+        url = f"{JR_BASE_URL}/in/rugs/{quote(slug_or_url, safe='/-')}"
+
+    if barcode and "barcode=" not in url:
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}barcode={quote(barcode, safe='')}"
+    return url
+
+
 async def _resolve_currency_from_ip(ip: str) -> str:
     import httpx
     try:
@@ -702,7 +725,7 @@ def _format(products: list[dict], currency: str, currency_field: str,
         color_map = score.get("colors", {})
         highest_color = max(color_map, key=lambda k: color_map[k], default="") if color_map else ""
         highest_pct = color_map.get(highest_color, 0.0)
-        slug = raw.get("ProductURL") or ""
+        product_url = raw.get("ProductURL") or p.get("ProductURL") or ""
         barcode = p.get("BarCode") or raw.get("BarCode") or ""
         display_name = (
             raw.get("Name") or p.get("Name")
@@ -724,7 +747,7 @@ def _format(products: list[dict], currency: str, currency_field: str,
         image_raw = raw.get("HeadShot", "")
         image_url = image_raw.replace(" ", "%20") if image_raw else ""
         out.append({
-            "url": f"https://www.jaipurrugs.com/in/rugs/{slug}?barcode={barcode}" if slug else "",
+            "url": _product_url(product_url, barcode),
             "price": {"currency": currency, "amount": raw.get(currency_field) or p.get(currency_field)},
             "name": display_name,
             "SKU": sku,

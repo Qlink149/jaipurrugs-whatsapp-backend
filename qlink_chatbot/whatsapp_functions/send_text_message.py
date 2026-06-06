@@ -11,6 +11,7 @@ from qlink_chatbot.utils.env_load import (
 from qlink_chatbot.utils.logger_config import logger
 
 PARTNER_BASE_URL = "https://partner.gupshup.io"
+GUPSHUP_TIMEOUT_SECONDS = 12.0
 
 
 def _normalize_destination(phone_number: str) -> str:
@@ -69,7 +70,7 @@ def send_text_message(phone_number: str, bot_response: str):
     )
 
     try:
-        response = httpx.post(url, headers=headers, data=data)
+        response = httpx.post(url, headers=headers, data=data, timeout=GUPSHUP_TIMEOUT_SECONDS)
         response.raise_for_status()
         response_payload = response.json()
         _save_outbound_event(

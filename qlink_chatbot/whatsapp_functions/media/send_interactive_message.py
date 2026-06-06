@@ -12,6 +12,7 @@ from qlink_chatbot.utils.logger_config import logger
 
 _MAX_BODY_LENGTH = 1024
 PARTNER_BASE_URL = "https://partner.gupshup.io"
+GUPSHUP_TIMEOUT_SECONDS = 12.0
 
 
 def _normalize_destination(phone_number: str) -> str:
@@ -86,7 +87,7 @@ def send_interactive_cta_message(phone_number: str, bot_response: dict):
     }
 
     try:
-        response = httpx.post(url, headers=headers, data=data)
+        response = httpx.post(url, headers=headers, data=data, timeout=GUPSHUP_TIMEOUT_SECONDS)
         response.raise_for_status()
         response_payload = response.json()
         _save_outbound_event(
