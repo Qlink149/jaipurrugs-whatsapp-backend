@@ -1,0 +1,64 @@
+name: Deploy Web Backend to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build Docker image
+        run: |
+          export DOCKER_BUILDKIT=1
+          docker build -t jr_web_backend:latest .
+          docker save jr_web_backend:latest -o jr_web_backend.tar
+
+      - name: Copy Docker image to VPS
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # master
+        with:
+          host: "65.20.74.206"
+          username: root
+          password: "3G)jy%N{?oj[m-bA"
+          source: "jr_web_backend.tar"
+          target: "/tmp/jr_deploy"
+          rm: true
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@1530429296e979861824d74fb800013190b5dee0 # master
+        with:
+          host: "65.20.74.206"
+          username: root
+          password: "3G)jy%N{?oj[m-bA"
+          script: |
+            set -e
+            docker load -i /tmp/jr_deploy/jr_web_backend.tar
+            if docker ps -a --format "{{.Names}}" | grep -qx qlink_web; then
+              docker inspect qlink_web --format '{{range .Config.Env}}{{println .}}{{end}}' > /tmp/qlink_web.env
+            fi
+            test -s /tmp/qlink_web.env
+            grep -q '^MONGO_URI=.' /tmp/qlink_web.env
+            docker stop qlink_web || true
+            docker rm qlink_web || true
+            docker run -d \
+              --name qlink_web \
+              -p 8000:8000 \
+              --env-file /tmp/qlink_web.env \
+              jr_web_backend:latest
+
+      - name: Cleanup
+        uses: appleboy/ssh-action@1530429296e979861824d74fb800013190b5dee0 # master
+        with:
+          host: "65.20.74.206"
+          username: root
+          password: "3G)jy%N{?oj[m-bA"
+          script: docker image prune -f

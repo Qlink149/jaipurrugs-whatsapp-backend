@@ -1,0 +1,257 @@
+name: Full Security Scan
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Verify Dockerfile Exists
+        run: |
+          if [ ! -f Dockerfile ]; then
+            echo "❌ Dockerfile not found" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Check JR API Client — no hardcoded credential fallbacks
+        id: check_jr_api
+        continue-on-error: true
+        run: |
+          FILE="qlink_chatbot/utils/jr_api_client.py"
+
+          if [ ! -f "$FILE" ]; then
+            echo "❌ $FILE not found" | tee -a $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          # Fail if os.getenv is used with a non-empty default for any JR_API_ key
+          if grep -En 'os\.getenv\("JR_API_(USERNAME|PASSWORD|CLIENT_ID|CLIENT_SECRET)",\s*"[^"]' "$FILE"; then
+            echo "❌ Hardcoded credential fallback detected in $FILE — use os.environ[KEY] instead of os.getenv(KEY, value)" | tee -a $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          # Fail if the four credential keys are not read via os.environ[
+          for KEY in JR_API_USERNAME JR_API_PASSWORD JR_API_CLIENT_ID JR_API_CLIENT_SECRET; do
+            if ! grep -qF "os.environ[\"${KEY}\"]" "$FILE"; then
+              echo "❌ ${KEY} is not loaded via os.environ in $FILE" | tee -a $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          done
+
+          echo "✅ $FILE: all JR API credentials loaded securely via os.environ" | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Install Trivy and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget jq
+          wget -qO- https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
+          sudo mv ./bin/trivy /usr/local/bin/trivy
+
+      - name: Run Semgrep
+        id: semgrep
+        continue-on-error: true
+        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
+        with:
+          config: p/security-audit
+
+      - name: Run Gitleaks
+        id: gitleaks
+        continue-on-error: true
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Trivy Filesystem Scan
+        id: trivy_fs
+        continue-on-error: true
+        run: |
+          trivy fs \
+            --severity HIGH,CRITICAL \
+            --format table \
+            .
+
+          EXIT_CODE=$?
+
+          trivy fs \
+            --severity HIGH,CRITICAL \
+            --format json \
+            -o trivy-fs.json \
+            .
+
+          exit $EXIT_CODE
+
+      - name: Build Docker Image
+        run: |
+          docker build -t security-scan-image:latest .
+
+      - name: Run Trivy Image Scan
+        id: trivy_image
+        continue-on-error: true
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --format table \
+            security-scan-image:latest
+
+          EXIT_CODE=$?
+
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --format json \
+            -o trivy-image.json \
+            security-scan-image:latest
+
+          exit $EXIT_CODE
+
+      - name: Run Checkov
+        id: checkov
+        continue-on-error: true
+        uses: bridgecrewio/checkov-action@dfb51aed1b783289b0d3f255028e7a88d5e8caa1 # master
+        with:
+          directory: .
+          output_format: cli,json
+          output_file_path: console,checkov-report.json
+          skip_check: CKV_K8S_43,CKV_K8S_35
+
+      - name: Generate SBOM
+        id: sbom
+        continue-on-error: true
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          output-file: sbom.spdx.json
+
+      - name: Generate Security Summary
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "# Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Scan Status" >> $GITHUB_STEP_SUMMARY
+          echo "- JR API Client Check: ${{ steps.check_jr_api.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Semgrep: ${{ steps.semgrep.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Gitleaks: ${{ steps.gitleaks.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Trivy Filesystem: ${{ steps.trivy_fs.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Trivy Image: ${{ steps.trivy_image.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Checkov: ${{ steps.checkov.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f checkov-report.json ]; then
+            # Checkov outputs an array [{results:{failed_checks:[]}}, ...] when scanning multiple types
+            FAILED_CHECKOV=$(jq 'if type == "array" then [.[].results.failed_checks[]?] else [.results.failed_checks[]?] end | length' checkov-report.json)
+            echo "## Checkov" >> $GITHUB_STEP_SUMMARY
+            echo "- Failed checks: $FAILED_CHECKOV" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            jq -r '
+            (if type == "array" then .[].results else .results end).failed_checks[]? |
+            "### " + (.check_id // "") + "\n" +
+            "- File: " + (.file_path // "") + "\n" +
+            "- Resource: " + (.resource // "") + "\n" +
+            "- Check: " + (.check_name // "") + "\n\n"
+            ' checkov-report.json >> $GITHUB_STEP_SUMMARY
+          fi
+
+          summarize_file () {
+            FILE=$1
+            TITLE=$2
+
+            if [ ! -f "$FILE" ]; then
+              return
+            fi
+
+            CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "$FILE")
+            HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' "$FILE")
+
+            echo "## $TITLE" >> $GITHUB_STEP_SUMMARY
+            echo "- Critical: $CRITICAL" >> $GITHUB_STEP_SUMMARY
+            echo "- High: $HIGH" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            jq -r '
+            .Results[]?.Vulnerabilities[]? |
+            select(.Severity=="CRITICAL" or .Severity=="HIGH") |
+            "### " + (.VulnerabilityID // "") + "\n" +
+            "- Severity: " + (.Severity // "") + "\n" +
+            "- Package: " + (.PkgName // "") + "\n" +
+            "- Installed Version: " + (.InstalledVersion // "") + "\n" +
+            "- Fixed Version: " + (.FixedVersion // "") + "\n" +
+            "- Title: " + (.Title // "") + "\n\n"
+            ' "$FILE" >> $GITHUB_STEP_SUMMARY
+          }
+
+          summarize_file trivy-fs.json "Filesystem Scan"
+          summarize_file trivy-image.json "Docker Image Scan"
+
+      - name: Upload Trivy Filesystem Report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trivy-filesystem-report
+          path: trivy-fs.json
+
+      - name: Upload Trivy Image Report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trivy-image-report
+          path: trivy-image.json
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom-report
+          path: sbom.spdx.json
+
+      - name: Upload Checkov Report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: checkov-report
+          path: checkov-report.json
+
+      - name: Security Gate
+        if: always()
+        run: |
+          FAILED=0
+
+          if [ "${{ steps.check_jr_api.outcome }}" = "failure" ]; then
+            FAILED=1
+          fi
+
+          if [ "${{ steps.semgrep.outcome }}" = "failure" ]; then
+            FAILED=1
+          fi
+
+          if [ "${{ steps.gitleaks.outcome }}" = "failure" ]; then
+            FAILED=1
+          fi
+
+          if [ "${{ steps.trivy_fs.outcome }}" = "failure" ]; then
+            FAILED=1
+          fi
+
+          if [ "${{ steps.trivy_image.outcome }}" = "failure" ]; then
+            FAILED=1
+          fi
+
+          if [ "${{ steps.checkov.outcome }}" = "failure" ]; then
+            FAILED=1
+          fi
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo "❌ SECURITY GATE FAILED"
+            exit 1
+          fi
+
+          echo "✅ ALL SECURITY CHECKS PASSED"
