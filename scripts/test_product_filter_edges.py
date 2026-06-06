@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from qlink_chatbot.agent.chat_agent import format_product_results
 from qlink_chatbot.routes.whatsapp_routes import _build_whatsapp_responses
+from qlink_chatbot.utils import env_load
 from qlink_chatbot.utils.geo_utils import country_code_for_phone, currency_for_country
 from qlink_chatbot.utils.search_middleware import (
     CURRENCY_FIELDS,
@@ -95,6 +96,18 @@ def test_urls_and_whatsapp_formatting():
     assert_true(responses[0]["caption"].startswith("1. *Cayenne Rug (Savana Collection)*"), "Caption title mismatch")
 
 
+def test_gupshup_env_presence():
+    missing = []
+    if not env_load.qlink_gupshup_app_id:
+        missing.append("QLINK_GUPSHUP_APP_ID or GUPSHUP_APP_ID")
+    if not env_load.qlink_gupshup_partner_app_token:
+        missing.append("QLINK_GUPSHUP_PARTNER_APP_TOKEN or GUPSHUP_PARTNER_APP_TOKEN/GUPSHUP_PARTNER_TOKEN")
+    if not env_load.qlink_gupshup_source:
+        missing.append("QLINK_GUPSHUP_SOURCE or GUPSHUP_SOURCE")
+    if missing:
+        print("WARN missing Gupshup env:", ", ".join(missing))
+
+
 async def test_live_mongo_optional():
     if not os.getenv("MONGO_URI"):
         print("SKIP live Mongo search: MONGO_URI is not set")
@@ -113,6 +126,7 @@ async def main():
     test_currency_queries()
     test_whatsapp_currency_detection()
     test_urls_and_whatsapp_formatting()
+    test_gupshup_env_presence()
     await test_live_mongo_optional()
     print("All product filter edge checks passed")
 
