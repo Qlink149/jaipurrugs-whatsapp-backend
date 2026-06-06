@@ -307,6 +307,7 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
                         m_field, filters.materials, filters.constructions,
                         filters.styles, filters.price_filter, filters.generics,
                         sku_filter, filters.shapes, filters.exclude_keys,
+                        currency_field=currency_field,
                     )
                     found = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
                     if found:
@@ -324,18 +325,18 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
         q = _build_query(None, query_colors, None, filters.sizes, None, filters.materials,
                          filters.constructions, [], filters.price_filter,
                          filters.generics + filters.styles, color_sku_filter, filters.shapes,
-                         filters.exclude_keys)
+                         filters.exclude_keys, currency_field=currency_field)
         results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
         if not results and color_sku_filter:
             q = _build_query(None, query_colors, None, filters.sizes, None, filters.materials,
                              filters.constructions, [], filters.price_filter,
                              filters.generics + filters.styles, [], filters.shapes,
-                             filters.exclude_keys)
+                             filters.exclude_keys, currency_field=currency_field)
             results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
 
     if not results and (filters.price_filter or filters.weight_filter):
         q = _build_query(None, [], None, [], None, [], [], [], filters.price_filter, [], [],
-                         filters.shapes, filters.exclude_keys)
+                         filters.shapes, filters.exclude_keys, currency_field=currency_field)
         results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
 
     if not results and filters.generics and any([
@@ -352,20 +353,22 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
         q = _build_query(
             None, query_colors, None, filters.sizes, None, filters.materials,
             filters.constructions, filters.styles, filters.price_filter, [],
-            color_sku_filter, filters.shapes, filters.exclude_keys
+            color_sku_filter, filters.shapes, filters.exclude_keys,
+            currency_field=currency_field,
         )
         results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
         if not results and color_sku_filter:
             q = _build_query(
                 None, query_colors, None, filters.sizes, None, filters.materials,
                 filters.constructions, filters.styles, filters.price_filter, [],
-                [], filters.shapes, filters.exclude_keys
+                [], filters.shapes, filters.exclude_keys,
+                currency_field=currency_field,
             )
             results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
 
     if not results and not filters.has_any_filter():
         q = _build_query(None, [], None, [], None, [], [], [], None, [], [], [],
-                         filters.exclude_keys)
+                         filters.exclude_keys, currency_field=currency_field)
         results = list(products_collection.find(q, {"_id": 0}).sort([("_id", 1)]).limit(200))
 
     if not results:
@@ -552,6 +555,7 @@ def _color_match(color_text: str, requested: str) -> bool:
 def _build_query(
     color_field, colors, size_field, sizes, material_field, materials,
     constructions, styles, price_filter, generics, sku_filter, shapes, exclude_keys=None,
+    currency_field=None,
 ) -> dict:
     q: dict = {"flags.inStock": True}
     and_clauses = []
@@ -596,6 +600,11 @@ def _build_query(
                     {f"raw.{field}": bounds},
                     {field: bounds},
                 ]})
+    elif currency_field:
+        and_clauses.append({"$or": [
+            {f"raw.{currency_field}": {"$gt": 0}},
+            {currency_field: {"$gt": 0}},
+        ]})
     if sku_filter:
         and_clauses.append({"$or": [
             {"raw.SKU": {"$in": sku_filter}}, {"SKU": {"$in": sku_filter}},
