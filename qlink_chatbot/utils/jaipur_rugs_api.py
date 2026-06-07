@@ -3,7 +3,7 @@ import re
 
 import httpx
 
-from qlink_chatbot.database.mongo_utils import db
+from qlink_chatbot.database.mongo_base import db
 from qlink_chatbot.utils.logger_config import logger
 
 products_collection = db["products"]
