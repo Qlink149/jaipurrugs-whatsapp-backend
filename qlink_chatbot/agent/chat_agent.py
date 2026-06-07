@@ -532,6 +532,13 @@ async def chat_agent(
                     filters=serialize_search_filters(filters),
                 )
                 return format_product_results(products, more_currency, current_user_name, more=True)
+            # No more products matching the criteria — return directly so the LLM
+            # cannot fall through and re-show products from context.
+            return (
+                "I couldn't find more rugs matching your criteria. "
+                "Would you like to try different filters or "
+                "[browse the full catalog](https://www.jaipurrugs.com/in/search)?"
+            )
 
         if is_less_expensive_request(user_message) and previous_product_filters:
             from qlink_chatbot.utils.search_middleware import SearchFilters, search as _mw_search
@@ -689,6 +696,14 @@ async def chat_agent(
                         # never sees raw JSON field names like "collection"
                         output = product_response_text or json.dumps({"error": "No priced products found."})
                     else:
+                        # If this was a show-more search, block LLM from falling
+                        # through to Step 3 and re-showing products from context.
+                        if show_more_request and (previous_product_filters or exclude_product_keys):
+                            product_response_text = (
+                                "I couldn't find more rugs matching your criteria. "
+                                "Would you like to try different filters or "
+                                "[browse the full catalog](https://www.jaipurrugs.com/in/search)?"
+                            )
                         output = json.dumps({"error": "No products found."})
 
                 elif item.name == "save_user_name":
