@@ -1,3 +1,9 @@
+"""
+Main chat agent — orchestrates the two-step LLM flow (tool call → final response).
+
+Helper functions  → chat_context.py
+Tool definitions  → chat_tools.py
+"""
 import json
 import os
 import re
@@ -5,133 +11,54 @@ from datetime import datetime, timedelta, timezone
 
 from openai import AsyncOpenAI
 
+from qlink_chatbot.agent.chat_context import (
+    cheapest_latest_amount,
+    format_product_results,
+    format_recent_chat_for_ai,
+    format_recent_products_for_ai,
+    is_currency_only_request,
+    is_less_expensive_request,
+    is_show_more_request,
+    last_product_search_filters,
+    latest_search_products,
+    merge_price_filters,
+    previously_shown_product_keys,
+    previously_shown_product_names,
+    requested_currency_from_message,
+    serialize_search_filters,
+)
+from qlink_chatbot.agent.chat_tools import execute_tool_calls, tools
 from qlink_chatbot.agent.utils.chat_agent_prompts import build_system_prompt
 from qlink_chatbot.database.mongo_utils import (
     get_previous_search,
-    raise_alert,
     return_system_prompt,
-    save_callback_phone,
     save_previous_search,
-    save_user_name,
     user_name,
 )
-from qlink_chatbot.database.pinecone_utils import fetch_similar_sessions
 from qlink_chatbot.utils.logger_config import logger
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 client = AsyncOpenAI(api_key=API_KEY) if API_KEY else None
 
-output_schema = {
+_output_schema = {
     "format": {
         "type": "json_schema",
         "name": "general_agent_schema_v1",
         "strict": True,
         "schema": {
             "type": "object",
-            "properties": {
-                "message": {
-                    "type": "string",
-                    "description": "Message to send to the user."
-                }
-            },
+            "properties": {"message": {"type": "string", "description": "Message to send to the user."}},
             "required": ["message"],
-            "additionalProperties": False
-        }
+            "additionalProperties": False,
+        },
     }
 }
-
-
-
-
-# Tool definition
-tools = [
-    {
-        "type": "function",
-        "name": "jaipur_rugs_product_search",
-        "description": "Search Jaipur Rugs products. Extract structured filters from the user's request and pass them as separate fields — do NOT pack everything into a single keyword string.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "colors":        {"type": "array", "items": {"type": "string"}, "description": "Color names. e.g. ['blue', 'ivory']"},
-                "shapes":        {"type": "array", "items": {"type": "string"}, "description": "Rug shape. e.g. ['round'], ['runner'], ['oval']"},
-                "sizes":         {"type": "array", "items": {"type": "string"}, "description": "Dimensions in WxH format. e.g. ['8x10', '5x7']"},
-                "materials":     {"type": "array", "items": {"type": "string"}, "description": "Material/fabric. e.g. ['wool'], ['silk'], ['viscose']"},
-                "constructions": {"type": "array", "items": {"type": "string"}, "description": "Construction type. e.g. ['hand knotted'], ['hand tufted'], ['flat weave']"},
-                "styles":        {"type": "array", "items": {"type": "string"}, "description": "Design style. e.g. ['modern'], ['traditional'], ['bohemian']"},
-                "price_max":     {"type": "number", "description": "Maximum price budget (in the currency field below)."},
-                "price_min":     {"type": "number", "description": "Minimum price budget for requests like above, over, more than, at least, or starting from."},
-                "currency":      {"type": "string", "description": "Currency for displaying prices AND for price_max filtering. Always set this when the user asks to see prices in a specific currency — even if there is no price budget. One of: INR, USD, EUR, GBP, AUD, CHF, SGD, AED. Defaults to the user's local currency."},
-                "weight_max":    {"type": "number", "description": "Maximum weight in kg. e.g. 8 means 'under 8kg'."},
-                "keyword":       {"type": "string", "description": "Free-text fallback only when none of the above fields apply. e.g. a collection name or design code."}
-            },
-            "required": []
-        }
-    },
-    {
-        "type": "function",
-        "name": "get_previous_search",
-        "description": "Retrieve the user's last 3–4 previous searches if they ask for it.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "session_id": {"type": "string", "description": "User's username"}
-            },
-            "required": ["session_id"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "search_kb",
-        "description": "Perform a semantic search in the knowledge base to find related past summaries or insights from previous conversations or agent learnings.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query text representing what the user is looking for."
-                },
-            },
-            "required": ["query"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "raise_agent_alert",
-        "description": "Raise an alert for a human agent to take over when the assistant cannot answer or needs support.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "alert": {
-                    "type": "string",
-                    "description": "Short one-line description of why agent assistance is needed."
-                }
-            },
-            "required": ["alert"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "save_callback_phone",
-        "description": "Save the user's phone number after they request a callback, so agents can see it.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "phone": {
-                    "type": "string",
-                    "description": "The user's phone number, including country code if provided."
-                }
-            },
-            "required": ["phone"]
-        }
-    },
-]
-
 
 _IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
 
 
 def _user_content(text: str):
-    """Return plain string for text-only messages, or a multimodal list when images are present."""
+    """Return plain string or multimodal list when images are embedded."""
     urls = _IMAGE_MD_RE.findall(text)
     if not urls:
         return text
@@ -142,468 +69,127 @@ def _user_content(text: str):
     return content
 
 
-def format_recent_chat_for_ai(chat_history, limit: int = 10) -> str:
-    if not chat_history:
-        return ""
-    recent_msgs = chat_history[-limit:]
-    formatted_lines = []
-    for msg in recent_msgs:
-        role = msg.get("role", "user").capitalize()
-        content = msg.get("content", "")
-        formatted_lines.append(f"{role}: {content}")
-    return "\n".join(formatted_lines)
-
-def format_recent_products_for_ai(previous_searches, max_products: int = 3) -> str:
-    """Return a compact JSON view of the latest shown products for follow-up Q&A."""
-    if not previous_searches:
-        return "[]"
-
-    latest_search = previous_searches[-1] if isinstance(previous_searches, list) else {}
-    results = latest_search.get("results", []) if isinstance(latest_search, dict) else []
-
-    if not isinstance(results, list):
-        return "[]"
-    compact_products = []
-    for product in results[:max_products]:
-        if not isinstance(product, dict):
-            continue
-        compact_products.append({
-            "name": product.get("name", ""),
-            "SKU": product.get("SKU", ""),
-            "size": product.get("size", ""),
-            "weight": product.get("weight", ""),
-            "material": product.get("material", ""),
-            "fabric": product.get("fabric", ""),
-            "mrp": product.get("mrp", {}),
-            "url": product.get("url", ""),
-        })
-
-    return json.dumps(compact_products)
-
-
-def previously_shown_product_keys(previous_searches) -> list[str]:
-    """Return SKU/BarCode keys already shown in this session."""
-    keys = []
-    if not isinstance(previous_searches, list):
-        return keys
-    for search in previous_searches:
-        if not isinstance(search, dict):
-            continue
-        for product in search.get("results", []) or []:
-            if not isinstance(product, dict):
-                continue
-            for field in ("SKU", "sku", "BarCode", "barcode"):
-                value = product.get(field)
-                if value:
-                    keys.append(str(value).strip().upper())
-            url = product.get("url")
-            if url and "barcode=" in url:
-                keys.append(str(url).rsplit("barcode=", 1)[-1].split("&", 1)[0].strip().upper())
-    return list(dict.fromkeys(keys))
-
-
-def previously_shown_product_names(previous_searches) -> list[str]:
-    names = []
-    if not isinstance(previous_searches, list):
-        return names
-    for search in previous_searches:
-        if not isinstance(search, dict):
-            continue
-        for product in search.get("results", []) or []:
-            if isinstance(product, dict) and product.get("name"):
-                names.append(str(product["name"]).strip())
-    return list(dict.fromkeys(names))
-
-
-def is_show_more_request(message: str) -> bool:
-    text = (message or "").lower()
-    return bool(re.search(r"\b(show|see|view|browse|search)\s+more\b|\bmore\s+(products|rugs|options)\b", text))
-
-
-def is_less_expensive_request(message: str) -> bool:
-    text = (message or "").lower()
-    return bool(re.search(r"\b(less expensive|less costly|cheaper|lower price|lower priced|more affordable|budget friendly)\b", text))
-
-
-def last_product_search_filters(previous_searches) -> dict:
-    if not isinstance(previous_searches, list):
-        return {}
-    for search in reversed(previous_searches):
-        if not isinstance(search, dict):
-            continue
-        filters = search.get("filters")
-        results = search.get("results")
-        if filters and isinstance(results, list) and results:
-            return filters
-    return {}
-
-
-def serialize_search_filters(filters) -> dict:
-    return {
-        "colors": list(filters.colors or []),
-        "shapes": list(filters.shapes or []),
-        "sizes": list(filters.sizes or []),
-        "materials": list(filters.materials or []),
-        "constructions": list(filters.constructions or []),
-        "styles": list(filters.styles or []),
-        "generics": list(filters.generics or []),
-        "price_max": (
-            filters.price_filter.get("max_amount", filters.price_filter.get("amount"))
-            if filters.price_filter else None
-        ),
-        "price_min": filters.price_filter.get("min_amount") if filters.price_filter else None,
-        "currency": filters.price_filter.get("currency") if filters.price_filter else filters.currency,
-        "weight_max": filters.weight_filter,
-    }
-
-
-def product_search_label(args: dict) -> str:
-    parts = []
-    for field in ("colors", "shapes", "sizes", "materials", "constructions", "styles"):
-        values = args.get(field) or []
-        if values:
-            parts.extend(str(value).strip() for value in values if value)
-    if args.get("price_max"):
-        parts.append(f"{args.get('currency') or 'INR'} {args.get('price_max')}")
-    if args.get("price_min"):
-        parts.append(f"above {args.get('currency') or 'INR'} {args.get('price_min')}")
-    if args.get("weight_max"):
-        parts.append(f"{args.get('weight_max')}kg")
-    if args.get("keyword"):
-        parts.append(str(args.get("keyword")).strip())
-    return " & ".join(part for part in parts if part) or "search"
-
-
-_CURRENCY_WORDS = {
-    "rupee": "INR", "rupees": "INR", "inr": "INR",
-    "dollar": "USD", "dollars": "USD", "usd": "USD",
-    "pound": "GBP", "pounds": "GBP", "gbp": "GBP",
-    "euro": "EUR", "euros": "EUR", "eur": "EUR",
-    "dirham": "AED", "dirhams": "AED", "aed": "AED",
-    "aud": "AUD", "chf": "CHF", "sgd": "SGD",
-}
-
-
-def requested_currency_from_message(message: str) -> str:
-    text = (message or "").lower()
-    code_match = re.search(r"\b(inr|usd|eur|gbp|aud|chf|sgd|aed)\b", text)
-    if code_match:
-        return code_match.group(1).upper()
-    for word, code in _CURRENCY_WORDS.items():
-        if re.search(rf"\b{re.escape(word)}\b", text):
-            return code
-    return ""
-
-
-def is_currency_only_request(message: str) -> bool:
-    text = (message or "").lower().strip()
-    if not requested_currency_from_message(text):
-        return False
-    return bool(re.search(
-        r"\b(show|display|give|tell|price|prices|convert|change|switch)\b.*\b(in|to)\b",
-        text,
-    )) and not re.search(
-        r"\b(red|blue|green|yellow|orange|purple|pink|white|black|grey|gray|brown|beige|ivory|cream|navy|round|runner|oval|wool|silk|cotton|jute|modern|traditional|rug under|rugs under)\b",
-        text,
-    )
-
-
-def latest_search_products(previous_searches) -> list[dict]:
-    if not isinstance(previous_searches, list):
-        return []
-    for search in reversed(previous_searches):
-        if not isinstance(search, dict):
-            continue
-        results = search.get("results")
-        if isinstance(results, list) and results:
-            return results
-    return []
-
-
-def product_amount_for_currency(product: dict, currency: str):
-    currency = (currency or "INR").upper()
-    price = product.get("price") or {}
-    amount = price.get("amount") if price.get("currency") == currency else None
-    if _amount_is_present(amount):
-        return float(str(amount).replace(",", ""))
-    mrp = product.get("mrp") or {}
-    amount = mrp.get(currency)
-    if _amount_is_present(amount):
-        return float(str(amount).replace(",", ""))
-    return None
-
-
-def cheapest_latest_amount(previous_searches, currency: str):
-    amounts = [
-        amount for amount in (
-            product_amount_for_currency(product, currency)
-            for product in latest_search_products(previous_searches)
-        )
-        if amount is not None
-    ]
-    return min(amounts) if amounts else None
-
-
-def _amount_is_present(value) -> bool:
-    try:
-        return float(str(value).replace(",", "")) > 0
-    except (TypeError, ValueError):
-        return bool(value)
-
-
-def _format_amount(value) -> str:
-    try:
-        numeric = float(str(value).replace(",", ""))
-        if numeric.is_integer():
-            return f"{int(numeric):,}"
-        return f"{numeric:,.2f}"
-    except (TypeError, ValueError):
-        return str(value)
-
-
-def product_price_line(product: dict, currency: str) -> str:
-    currency = (currency or "INR").upper()
-    price = product.get("price") or {}
-    amount = price.get("amount") if price.get("currency") == currency else None
-    mrp = product.get("mrp") or {}
-    if not _amount_is_present(amount):
-        amount = mrp.get(currency)
-    if _amount_is_present(amount):
-        return f"Price: {currency} {_format_amount(amount)}"
-
-    inr_amount = mrp.get("INR")
-    if currency != "INR" and _amount_is_present(inr_amount):
-        return f"Price: Not listed in {currency} - INR {_format_amount(inr_amount)}"
-    return f"Price: Not listed in {currency}"
-
-
-def product_title_line(product: dict) -> str:
-    title = str(product.get("name") or product.get("SKU") or "Jaipur Rugs Product").strip()
-    collection = str(product.get("collection") or "").strip()
-    if collection and collection.lower() not in title.lower():
-        title = f"{title} ({collection})"
-    return title
-
-
-def format_product_results(products: list[dict], currency: str, user_display_name: str = "", more: bool = False) -> str:
-    # Only show products that have a displayable price in the requested currency
-    priced = [
-        p for p in (products or [])
-        if isinstance(p, dict) and _amount_is_present(
-            (p.get("price") or {}).get("amount") or (p.get("mrp") or {}).get(currency)
-        )
-    ]
-    if not priced:
-        return "I couldn't find matching rugs right now."
-
-    blocks = []
-    for index, product in enumerate(priced[:3], start=1):
-        title = product_title_line(product)
-        lines = [
-            f"{index}. **{title}**",
-            f"- Size: {product.get('size') or 'Not listed'}",
-            f"- Material: {product.get('material') or product.get('fabric') or 'Not listed'}",
-            f"- {product_price_line(product, currency)}",
-        ]
-        if product.get("style"):
-            lines.append(f"- Style: {product.get('style')}")
-        if product.get("construction"):
-            lines.append(f"- Construction: {product.get('construction')}")
-        if product.get("url"):
-            lines.append(f"- [View Product]({product.get('url')})")
-        if product.get("image"):
-            lines.append(f"- ![Image]({product.get('image')})")
-        blocks.append("\n".join(lines))
-
-    blocks.append("[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)")
-    return "\n\n".join(blocks)
-
-
-def merge_keyword_filters(filters, keyword_filters) -> None:
-    for attr in ("colors", "shapes", "sizes", "materials", "constructions", "styles", "generics"):
-        merged = list(getattr(filters, attr, []) or [])
-        for value in getattr(keyword_filters, attr, []) or []:
-            if value not in merged:
-                merged.append(value)
-        setattr(filters, attr, merged)
-
-    if not filters.price_filter and keyword_filters.price_filter:
-        filters.price_filter = keyword_filters.price_filter
-    if filters.weight_filter is None and keyword_filters.weight_filter is not None:
-        filters.weight_filter = keyword_filters.weight_filter
-
-
-def merge_price_filters(filters, keyword_filters) -> None:
-    if not filters.price_filter and keyword_filters.price_filter:
-        filters.price_filter = keyword_filters.price_filter
-        filters.currency = keyword_filters.price_filter.get("currency", filters.currency)
-    if filters.weight_filter is None and keyword_filters.weight_filter is not None:
-        filters.weight_filter = keyword_filters.weight_filter
-
-
-def agent_alert_tool(alert, sesson_id):
-    """Tool function to raise an agent alert"""
-    try:
-        raise_alert(
-            session_id=sesson_id,
-            alert_body=alert
-        )
-    except Exception:
-        logger.error("Error occured while using agent alert tool call.")
-
-
 async def chat_agent(
     chat_history,
-    user_message,
-    session_id,
-    country_code,
-    client_ip="",
+    user_message: str,
+    session_id: str,
+    country_code: str,
+    client_ip: str = "",
     collection_name: str = "users",
     detected_currency: str = "",
-):
-    """Main Jaipur Rugs chatbot agent."""
+) -> str:
+    """Main Jaipur Rugs chatbot agent. Returns the assistant's reply as a string."""
     response = None
     try:
         if not client:
             raise RuntimeError("OPENAI_API_KEY is not configured.")
-        system_prompt_variable = return_system_prompt()
-        if system_prompt_variable:
-            system_prompt = build_system_prompt(
-                system_identity=system_prompt_variable["system_identity"],
-                system_conversation_style=system_prompt_variable["system_conversation_style"],
-                system_product_display_format=system_prompt_variable["system_product_display_format"],
-                system_others=system_prompt_variable["system_others"],
+
+        # ── Build system prompt ───────────────────────────────────────────────
+        sp_vars = return_system_prompt()
+        system_prompt = (
+            build_system_prompt(
+                system_identity=sp_vars["system_identity"],
+                system_conversation_style=sp_vars["system_conversation_style"],
+                system_product_display_format=sp_vars["system_product_display_format"],
+                system_others=sp_vars["system_others"],
             )
-        else:
-            system_prompt = build_system_prompt() 
-            
+            if sp_vars
+            else build_system_prompt()
+        )
 
-
+        # ── Session context ───────────────────────────────────────────────────
         _IST = timezone(timedelta(hours=5, minutes=30))
-        _now_ist = datetime.now(_IST)
-        _ist_time_str = _now_ist.strftime("%A, %I:%M %p IST")
+        ist_time_str = datetime.now(_IST).strftime("%A, %I:%M %p IST")
 
-        # Fetch and format the latest shown products so the AI can answer
-        # follow-up questions ("the first one", "its price in AED") accurately
         recent_searches = get_previous_search(session_id=session_id, collection_name=collection_name)
-        latest_products_context = format_recent_products_for_ai(recent_searches)
-        exclude_product_keys = previously_shown_product_keys(recent_searches)
-        exclude_product_names = previously_shown_product_names(recent_searches)
-        show_more_request = is_show_more_request(user_message)
-        previous_product_filters = last_product_search_filters(recent_searches)
-        requested_currency = requested_currency_from_message(user_message)
-        current_user_name = user_name(session_id=session_id, collection_name=collection_name)
+        latest_products_ctx = format_recent_products_for_ai(recent_searches)
+        exclude_keys = previously_shown_product_keys(recent_searches)
+        exclude_names = previously_shown_product_names(recent_searches)
+        show_more = is_show_more_request(user_message)
+        prev_filters = last_product_search_filters(recent_searches)
+        req_currency = requested_currency_from_message(user_message)
+        current_name = user_name(session_id=session_id, collection_name=collection_name)
 
-        if requested_currency and is_currency_only_request(user_message):
-            latest_products = latest_search_products(recent_searches)
-            if latest_products:
-                return format_product_results(
-                    latest_products,
-                    requested_currency,
-                    current_user_name,
-                )
+        # ── Currency-only shortcut ────────────────────────────────────────────
+        if req_currency and is_currency_only_request(user_message):
+            latest = latest_search_products(recent_searches)
+            if latest:
+                return format_product_results(latest, req_currency, current_name)
 
-        if show_more_request and previous_product_filters:
+        # ── Show-more early path (bypasses LLM entirely) ──────────────────────
+        if show_more and prev_filters:
             from qlink_chatbot.utils.search_middleware import SearchFilters, search as _mw_search
-
-            more_currency = (previous_product_filters.get("currency") or detected_currency or "INR").upper()
+            more_currency = (prev_filters.get("currency") or detected_currency or "INR").upper()
             filters = SearchFilters.from_params(
-                colors=previous_product_filters.get("colors"),
-                shapes=previous_product_filters.get("shapes"),
-                sizes=previous_product_filters.get("sizes"),
-                materials=previous_product_filters.get("materials"),
-                constructions=previous_product_filters.get("constructions"),
-                styles=previous_product_filters.get("styles"),
-                generics=previous_product_filters.get("generics"),
-                price_max=previous_product_filters.get("price_max"),
-                price_min=previous_product_filters.get("price_min"),
+                colors=prev_filters.get("colors"),
+                shapes=prev_filters.get("shapes"),
+                sizes=prev_filters.get("sizes"),
+                materials=prev_filters.get("materials"),
+                constructions=prev_filters.get("constructions"),
+                styles=prev_filters.get("styles"),
+                generics=prev_filters.get("generics"),
+                price_max=prev_filters.get("price_max"),
+                price_min=prev_filters.get("price_min"),
                 currency=more_currency,
-                weight_max=previous_product_filters.get("weight_max"),
-                exclude_keys=exclude_product_keys,
-                exclude_names=exclude_product_names,
+                weight_max=prev_filters.get("weight_max"),
+                exclude_keys=exclude_keys,
+                exclude_names=exclude_names,
             )
             products = await _mw_search(filters, client_ip=client_ip)
             if isinstance(products, list) and products:
                 save_previous_search(
-                    session_id,
-                    "show more",
-                    products,
+                    session_id, "show more", products,
                     collection_name=collection_name,
                     filters=serialize_search_filters(filters),
                 )
-                return format_product_results(products, more_currency, current_user_name, more=True)
-            # No more products matching the criteria — return directly so the LLM
-            # cannot fall through and re-show products from context.
+                return format_product_results(products, more_currency, current_name, more=True)
             return (
                 "I couldn't find more rugs matching your criteria. "
                 "Would you like to try different filters or "
                 "[browse the full catalog](https://www.jaipurrugs.com/in/search)?"
             )
 
-        if is_less_expensive_request(user_message) and previous_product_filters:
+        # ── Less-expensive early path ─────────────────────────────────────────
+        if is_less_expensive_request(user_message) and prev_filters:
             from qlink_chatbot.utils.search_middleware import SearchFilters, search as _mw_search
-
-            less_currency = (previous_product_filters.get("currency") or detected_currency or "INR").upper()
+            less_currency = (prev_filters.get("currency") or detected_currency or "INR").upper()
             price_ceiling = cheapest_latest_amount(recent_searches, less_currency)
             filters = SearchFilters.from_params(
-                colors=previous_product_filters.get("colors"),
-                shapes=previous_product_filters.get("shapes"),
-                sizes=previous_product_filters.get("sizes"),
-                materials=previous_product_filters.get("materials"),
-                constructions=previous_product_filters.get("constructions"),
-                styles=previous_product_filters.get("styles"),
-                generics=previous_product_filters.get("generics"),
-                price_max=price_ceiling or previous_product_filters.get("price_max"),
-                price_min=previous_product_filters.get("price_min"),
+                colors=prev_filters.get("colors"),
+                shapes=prev_filters.get("shapes"),
+                sizes=prev_filters.get("sizes"),
+                materials=prev_filters.get("materials"),
+                constructions=prev_filters.get("constructions"),
+                styles=prev_filters.get("styles"),
+                generics=prev_filters.get("generics"),
+                price_max=price_ceiling or prev_filters.get("price_max"),
+                price_min=prev_filters.get("price_min"),
                 currency=less_currency,
-                weight_max=previous_product_filters.get("weight_max"),
-                exclude_keys=exclude_product_keys,
-                exclude_names=exclude_product_names,
+                weight_max=prev_filters.get("weight_max"),
+                exclude_keys=exclude_keys,
+                exclude_names=exclude_names,
             )
             products = await _mw_search(filters, client_ip=client_ip)
             if isinstance(products, list) and products:
                 save_previous_search(
-                    session_id,
-                    "less expensive",
-                    products,
+                    session_id, "less expensive", products,
                     collection_name=collection_name,
                     filters=serialize_search_filters(filters),
                 )
-                return format_product_results(products, less_currency, current_user_name, more=True)
+                return format_product_results(products, less_currency, current_name, more=True)
 
-        input_list = [
-            {"role": "developer", "content": f"Chat history:\n{format_recent_chat_for_ai(chat_history)}"},
-            {"role": "developer", "content": f"Latest shown products (use these for follow-up questions — 'the first one', 'its price', 'what material is it'): {latest_products_context}"},
-            {"role": "developer", "content": f"Current date and time: {_ist_time_str}"},
-            {"role": "developer", "content": f"users country code: {country_code}"},
-            {"role": "developer", "content": f"User's detected local currency: {detected_currency or 'INR'}. Show product prices in this currency by default unless the user explicitly asks for a different one."},
-            {"role": "developer", "content": "Any request that includes product attributes (color, size, material, construction, style, shape) OR uses words like 'show', 'find', 'search', 'give me', 'I want', 'I need' is ALWAYS a new product search — call `jaipur_rugs_product_search` immediately. Never answer such requests from previously shown products context."},
-            {"role": "developer", "content": "If the user asks to see a new product search in a specific currency (e.g. 'show red rugs in USD', 'find rugs in AED', 'in dollars'), set the `currency` field in the `jaipur_rugs_product_search` call to that currency code."},
-            {"role": "developer", "content": "Price budget language must become structured filters: 'under', 'below', 'less than', 'within', 'up to', 'budget', 'less expensive than' => price_max. 'over', 'above', 'more than', 'greater than', 'at least', 'starting from' => price_min. Use the detected currency unless the user names another currency."},
-            {"role": "developer", "content": "If the user says 'less expensive', 'cheaper', or 'more affordable' after products were shown, call/search with the same filters and a lower price ceiling than the cheapest previously shown product."},
-            {"role": "developer", "content": "When `jaipur_rugs_product_search` returns a list of products, you MUST display ALL of them — regardless of whether the price.amount is null or zero. For any product where price.amount is null or zero, display: 'Price: Not listed in [currency] — INR: ₹[mrp.INR]'. BANNED phrases: 'I couldn't find any rugs with [currency] pricing', 'no rugs listed with [currency] prices', 'Would you like me to search in INR instead' — these are never acceptable when the tool returned products."},
-            {"role": "developer", "content": "PRICES MUST COME FROM TOOL DATA ONLY. Use the exact value from price.amount or mrp.[currency]. Never calculate, convert, estimate, or invent any price."},
-            {"role": "developer", "content": "When the user asks to show more products, you MUST call `jaipur_rugs_product_search` — never repeat or re-list products already shown. The backend automatically excludes already-shown products from the new results."},
-            {
-                "role": "developer",
-                "content": f"user name: {current_user_name}",
-            },
-            {"role": "developer", "content": "Never produce filler text like 'searching...' or 'one moment please'. If a tool is needed, directly call the tool without any extra wording."},
-            {"role": "developer", "content": "If `jaipur_rugs_product_search` returns an empty list or error (e.g., no results for a 'show more' request), do NOT re-show or repeat products that were already shown to the user. Instead respond: 'I couldn't find more rugs matching your criteria. Would you like to adjust the filters or browse the full catalog?'"},
-            {"role": "developer", "content": "PRODUCT TITLE RULE: When displaying a rug from tool results, the FIRST line of each product block MUST be the product number followed by the `name` field in bold — exactly like `1. **Bespoke Sile**`. NEVER write `- Collection: Bespoke Sile` or label the name with any key. The bold name line MUST come first, before any `- Size:`, `- Material:`, or other fields."},
-            {"role": "developer", "content": "When `jaipur_rugs_product_search` returns pre-formatted product text (lines starting with `1. **`, `2. **`, etc.), output that text VERBATIM as your response — do NOT reformat, rewrite, relabel, or add any fields. Only prepend a short intro sentence if needed."},
-            {"role": "developer", "content": "When responding: do not add any narrative, status updates, waiting messages, politeness fillers, or redundant sentences. Either answer directly or call a tool directly."},
-            {"role": "developer", "content": "When `jaipur_rugs_product_search` returns multiple products, you MUST show ALL of them in the response — display every product returned (up to 3). Each product gets its own full block with image, size, material, price, and link. NEVER show only 1 product when 2 or 3 were returned."},
-            {"role": "developer", "content": "Only skip the search tool if the user is asking about a SPECIFIC previously shown rug by position or name (e.g. 'what is the price of the first one?', 'price in GBP for rug 2', 'the link for rug number 2', 'what material is that last one?'). In that case, answer from 'Latest shown products' using the exact mrp.[currency] value from MongoDB. If that currency value is missing or zero, say it is not listed and give the INR price. For ALL other requests — including any request mentioning a color, size, material, style, or asking to 'show', 'find', or 'search' — call `jaipur_rugs_product_search`."},
-            {"role": "developer", "content": "If the user asks to show more products or more rugs, call `jaipur_rugs_product_search` again with the same filters or search intent from the prior product request. The backend will exclude products already shown in this session."},
-            {"role": "developer", "content": f"Previous product search filters for show-more requests: {json.dumps(previous_product_filters)}"},
-            {"role": "developer", "content": "Only when the response contains actual rug results returned by the `jaipur_rugs_product_search` tool, append this exact line at the very end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'. Do NOT add it for cleaning, care, order, careers, custom rug, or any non-product response."},
-            {"role": "user", "content": _user_content(user_message)}
-        ]
+        # ── Step 1: LLM call with tools ───────────────────────────────────────
+        input_list = _build_input(
+            chat_history=chat_history,
+            user_message=user_message,
+            ist_time_str=ist_time_str,
+            country_code=country_code,
+            detected_currency=detected_currency,
+            latest_products_ctx=latest_products_ctx,
+            prev_filters=prev_filters,
+            current_name=current_name,
+        )
 
-
-        # Step 1: Model processes with tools available
-        # Low temperature here for consistent, deterministic tool-call decisions
         response = await client.responses.create(
             model="gpt-4.1-mini",
             tools=tools,
@@ -611,180 +197,93 @@ async def chat_agent(
             temperature=0.2,
             instructions=system_prompt,
             max_output_tokens=2048,
-            text=output_schema,
+            text=_output_schema,
             top_p=1,
         )
+        logger.info("model response step 1", extra={"response": response})
+        input_list = input_list + list(response.output)
 
-        logger.info("model response", extra={"response": response})
-        input_list += response.output
+        # ── Step 2: Execute tool calls ────────────────────────────────────────
+        has_tool_calls = any(item.type == "function_call" for item in response.output)
+        tool_outputs, product_text = [], ""
+        if has_tool_calls:
+            tool_outputs, product_text = await execute_tool_calls(
+                response.output,
+                session_id=session_id,
+                collection_name=collection_name,
+                client_ip=client_ip,
+                detected_currency=detected_currency,
+                requested_currency=req_currency,
+                show_more_request=show_more,
+                previous_product_filters=prev_filters,
+                exclude_product_keys=exclude_keys,
+                exclude_product_names=exclude_names,
+                current_user_name=current_name,
+                user_message=user_message,
+            )
+            input_list = input_list + tool_outputs
 
+        # Product search completed — return pre-formatted text directly.
+        if product_text:
+            return product_text
 
-        # Step 2: Handle tool calls — collect ALL outputs before calling model again
-        has_tool_calls = False
-        product_response_text = ""
-        for item in response.output:
-            if item.type == "function_call":
-                has_tool_calls = True
-                args = json.loads(item.arguments)
-                output = ""
-                if item.name == "jaipur_rugs_product_search":
-                    from qlink_chatbot.utils.search_middleware import SearchFilters, search as _mw_search
-                    kw = args.get("keyword", "")
-                    resolved_currency = (args.get("currency") or requested_currency or detected_currency or "INR").upper()
-                    message_filters = SearchFilters.from_keyword(user_message, currency=resolved_currency)
-
-                    if show_more_request and previous_product_filters:
-                        filters = SearchFilters.from_params(
-                            colors=previous_product_filters.get("colors"),
-                            shapes=previous_product_filters.get("shapes"),
-                            sizes=previous_product_filters.get("sizes"),
-                            materials=previous_product_filters.get("materials"),
-                            constructions=previous_product_filters.get("constructions"),
-                            styles=previous_product_filters.get("styles"),
-                            generics=previous_product_filters.get("generics"),
-                            price_max=previous_product_filters.get("price_max"),
-                            price_min=previous_product_filters.get("price_min"),
-                            currency=(previous_product_filters.get("currency") or resolved_currency),
-                            weight_max=previous_product_filters.get("weight_max"),
-                            exclude_keys=exclude_product_keys,
-                            exclude_names=exclude_product_names,
-                        )
-                        products = await _mw_search(filters, client_ip=client_ip)
-                    elif any(args.get(f) for f in ("colors","shapes","sizes","materials","constructions","styles","price_max","price_min","weight_max")):
-                        # LLM provided structured params → use middleware directly
-                        filters = SearchFilters.from_params(
-                            colors=args.get("colors"),
-                            shapes=args.get("shapes"),
-                            sizes=args.get("sizes"),
-                            materials=args.get("materials"),
-                            constructions=args.get("constructions"),
-                            styles=args.get("styles"),
-                            price_max=args.get("price_max"),
-                            price_min=args.get("price_min"),
-                            currency=resolved_currency,
-                            weight_max=args.get("weight_max"),
-                            exclude_keys=exclude_product_keys,
-                            exclude_names=exclude_product_names,
-                        )
-                        merge_price_filters(filters, message_filters)
-                        if kw:  # merge any free-text keyword into generics
-                            kw_filters = SearchFilters.from_keyword(kw, currency=resolved_currency)
-                            merge_keyword_filters(filters, kw_filters)
-                        products = await _mw_search(filters, client_ip=client_ip)
-                    else:
-                        # Fallback: LLM used old keyword-only style
-                        filters = SearchFilters.from_keyword(kw or user_message, currency=resolved_currency)
-                        filters.exclude_keys = exclude_product_keys
-                        filters.exclude_names = exclude_product_names
-                        products = await _mw_search(filters, client_ip=client_ip)
-                    if isinstance(products, list) and products:
-                        search_label = product_search_label(args)
-                        save_previous_search(
-                            session_id,
-                            search_label,
-                            products,
-                            collection_name=collection_name,
-                            filters=serialize_search_filters(filters),
-                        )
-                        product_response_text = format_product_results(
-                            products,
-                            filters.currency,
-                            current_user_name,
-                            more=show_more_request,
-                        )
-                        # Pass formatted text as tool output so LLM in step 3
-                        # never sees raw JSON field names like "collection"
-                        output = product_response_text or json.dumps({"error": "No priced products found."})
-                    else:
-                        # If this was a show-more search, block LLM from falling
-                        # through to Step 3 and re-showing products from context.
-                        if show_more_request and (previous_product_filters or exclude_product_keys):
-                            product_response_text = (
-                                "I couldn't find more rugs matching your criteria. "
-                                "Would you like to try different filters or "
-                                "[browse the full catalog](https://www.jaipurrugs.com/in/search)?"
-                            )
-                        output = json.dumps({"error": "No products found."})
-
-                elif item.name == "save_user_name":
-                    name = args.get("name")
-                    save_user_name(
-                        session_id,
-                        name,
-                        collection_name=collection_name,
-                    )
-                    output = json.dumps({"status": "success"})
-
-                elif item.name == "get_previous_search":
-                    prev_searches = get_previous_search(
-                        session_id=session_id,
-                        collection_name=collection_name,
-                    )
-                    output = json.dumps(prev_searches)
-
-                elif item.name == "search_kb":
-                    query = args.get("query")
-                    kb_search_response = await fetch_similar_sessions(query=query, top_k=5)
-                    output = json.dumps(kb_search_response)
-
-                elif item.name == "raise_agent_alert":
-                    alert = args.get("alert")
-                    agent_alert_tool(alert=alert, sesson_id=session_id)
-                    output = json.dumps({"status": "success"})
-
-                elif item.name == "save_callback_phone":
-                    phone = args.get("phone", "")
-                    save_callback_phone(session_id, phone, collection_name=collection_name)
-                    output = json.dumps({"status": "saved", "phone": phone})
-
-                input_list.append({
-                    "type": "function_call_output",
-                    "call_id": item.call_id,
-                    "output": output
-                })
-
-        if product_response_text:
-            return product_response_text
-
-        # Step 3: Final model response — called ONCE after all tool outputs are collected
+        # ── Step 3: Final LLM response (non-product) ──────────────────────────
         if has_tool_calls:
             response = await client.responses.create(
                 model="gpt-4.1-mini",
                 instructions=system_prompt,
                 input=input_list,
-                text=output_schema
+                text=_output_schema,
             )
+            logger.info("model response step 3", extra={"response": response})
 
-            logger.info("model response", extra={"response": response})
-
-        # Find the text message output item — don't assume it's always [0]
-        text_content = None
+        # Extract text from the response output
         for out_item in (response.output or []):
-            try:
-                for content_item in (getattr(out_item, "content", None) or []):
-                    if getattr(content_item, "text", None):
-                        text_content = content_item.text
-                        break
-            except Exception:
-                pass
-            if text_content:
-                break
+            for content_item in (getattr(out_item, "content", None) or []):
+                if getattr(content_item, "text", None):
+                    return json.loads(content_item.text).get("message", "")
 
-        if not text_content:
-            logger.error("chat_agent: no text content found in response output",
-                         extra={"response": str(response), "session_id": session_id})
-            return "I'm sorry, I couldn't generate a response. Please try again."
-
-        output = json.loads(text_content)
-        return output.get("message")
+        logger.error("chat_agent: no text content found", extra={"session_id": session_id})
+        return "I'm sorry, I couldn't generate a response. Please try again."
 
     except Exception as e:
-        logger.error(
-            "error occurred while generating chat response",
-            extra={
-                "error": str(e),
-                "response": response if response else "",
-                "session_id": session_id
-            }
-        )
+        logger.error("chat_agent error", extra={"error": str(e), "session_id": session_id})
         return "I'm sorry, I ran into an issue processing your request. Could you please try again?"
+
+
+def _build_input(
+    *,
+    chat_history,
+    user_message: str,
+    ist_time_str: str,
+    country_code: str,
+    detected_currency: str,
+    latest_products_ctx: str,
+    prev_filters: dict,
+    current_name: str,
+) -> list[dict]:
+    """Assemble the developer + user message list for the LLM."""
+    return [
+        {"role": "developer", "content": f"Chat history:\n{format_recent_chat_for_ai(chat_history)}"},
+        {"role": "developer", "content": f"Latest shown products (for follow-up questions): {latest_products_ctx}"},
+        {"role": "developer", "content": f"Current date and time: {ist_time_str}"},
+        {"role": "developer", "content": f"User's country code: {country_code}"},
+        {"role": "developer", "content": f"User's detected local currency: {detected_currency or 'INR'}. Show product prices in this currency by default unless the user explicitly asks for a different one."},
+        {"role": "developer", "content": "Any request that includes product attributes (color, size, material, construction, style, shape) OR uses words like 'show', 'find', 'search', 'give me', 'I want', 'I need' is ALWAYS a new product search — call `jaipur_rugs_product_search` immediately."},
+        {"role": "developer", "content": "If the user asks to see products in a specific currency, set the `currency` field in the `jaipur_rugs_product_search` call to that currency code."},
+        {"role": "developer", "content": "Price budget language: 'under', 'below', 'less than', 'up to' → price_max. 'over', 'above', 'more than', 'at least', 'starting from' → price_min."},
+        {"role": "developer", "content": "If the user says 'less expensive', 'cheaper', or 'more affordable' after products were shown, search with the same filters and a lower price ceiling."},
+        {"role": "developer", "content": "When `jaipur_rugs_product_search` returns products, display ALL of them. BANNED: 'I couldn't find any rugs with [currency] pricing' when products were returned."},
+        {"role": "developer", "content": "PRICES MUST COME FROM TOOL DATA ONLY. Never calculate, convert, estimate, or invent any price."},
+        {"role": "developer", "content": "When the user asks to show more products, call `jaipur_rugs_product_search`. The backend automatically excludes already-shown products."},
+        {"role": "developer", "content": f"User name: {current_name}"},
+        {"role": "developer", "content": "Never produce filler text like 'searching...' or 'one moment please'. Call the tool directly."},
+        {"role": "developer", "content": "If `jaipur_rugs_product_search` returns an empty list, do NOT re-show previously shown products. Respond: 'I couldn't find more rugs matching your criteria.'"},
+        {"role": "developer", "content": "PRODUCT TITLE RULE: First line of each product block MUST be the number followed by `name` in bold — exactly like `1. **Bespoke Sile**`."},
+        {"role": "developer", "content": "When `jaipur_rugs_product_search` returns pre-formatted product text, output it VERBATIM. Do NOT reformat, rewrite, or add fields."},
+        {"role": "developer", "content": "Show ALL products returned (up to 3). NEVER show only 1 when 2 or 3 were returned."},
+        {"role": "developer", "content": "Only skip the search tool if the user asks about a SPECIFIC previously shown rug by position or name (e.g. 'price of the first one'). For ALL other requests, call `jaipur_rugs_product_search`."},
+        {"role": "developer", "content": f"Previous product search filters for show-more: {json.dumps(prev_filters)}"},
+        {"role": "developer", "content": "Only when the response contains actual rug results, append this at the very end: '[🔍 Search More Rugs](https://www.jaipurrugs.com/in/search)'. NOT for care, order, career, or custom rug responses."},
+        {"role": "user", "content": _user_content(user_message)},
+    ]
