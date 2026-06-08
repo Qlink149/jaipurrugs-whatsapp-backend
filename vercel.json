@@ -12,7 +12,7 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "/api/index"
+      "dest": "/api/index.py"
     }
   ],
   "crons": [
