@@ -520,3 +520,76 @@ async def product_search(request: Request, payload: dict = Body(...)):
     except Exception as e:
         logger.error(f"Product search endpoint error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Visitor Insights endpoint ─────────────────────────────────────────────────
+
+_INSIGHT_COLORS = {
+    "red", "blue", "green", "yellow", "orange", "purple", "pink", "white",
+    "black", "grey", "gray", "brown", "beige", "ivory", "cream", "navy",
+    "teal", "turquoise", "gold", "silver", "rust", "coral", "indigo",
+    "maroon", "burgundy", "charcoal", "olive", "mustard", "peach", "lavender",
+}
+
+
+@general_router.post("/visitor-insights/{session_id}")
+def get_visitor_insights(session_id: str):
+    """Return aggregated insights for a web visitor identified by session_id (email)."""
+    try:
+        sid = session_id.lower().strip()
+        session = sessions_collection.find_one({"session_id": sid}, {"_id": 0})
+        if not session:
+            return JSONResponse({
+                "session_id": sid,
+                "found": False,
+                "total_messages": 0,
+                "total_searches": 0,
+                "top_colors": [],
+                "top_keywords": [],
+                "chat_history": [],
+                "previous_searches": [],
+            }, status_code=200)
+
+        chat_history = session.get("chat_history") or []
+        previous_searches = session.get("previous_searches") or []
+
+        # Count messages by role
+        user_msgs = [m for m in chat_history if m.get("role") == "user"]
+
+        # Extract colors from search filters
+        color_counter: dict[str, int] = {}
+        keyword_counter: dict[str, int] = {}
+        for search in previous_searches:
+            filters = search.get("filters") or {}
+            for color in (filters.get("colors") or []):
+                c = color.lower().strip()
+                if c:
+                    color_counter[c] = color_counter.get(c, 0) + 1
+            kw = (search.get("keyword") or "").strip().lower()
+            if kw:
+                keyword_counter[kw] = keyword_counter.get(kw, 0) + 1
+                for part in kw.split():
+                    if part in _INSIGHT_COLORS:
+                        color_counter[part] = color_counter.get(part, 0) + 1
+
+        top_colors = sorted(color_counter.items(), key=lambda x: -x[1])
+        top_keywords = sorted(keyword_counter.items(), key=lambda x: -x[1])
+
+        return JSONResponse({
+            "session_id": sid,
+            "found": True,
+            "user_name": session.get("user_name", ""),
+            "country_code": session.get("country_code", ""),
+            "last_active": str(session.get("updated_at", "")),
+            "total_messages": len(chat_history),
+            "user_messages": len(user_msgs),
+            "total_searches": len(previous_searches),
+            "top_colors": [{"color": c, "count": n} for c, n in top_colors[:5]],
+            "top_keywords": [{"keyword": k, "count": n} for k, n in top_keywords[:5]],
+            "chat_history": chat_history[-20:],
+            "previous_searches": previous_searches[-10:],
+        }, status_code=200)
+
+    except Exception as e:
+        logger.error(f"visitor-insights error for {session_id}: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)

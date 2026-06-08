@@ -71,6 +71,8 @@ def _build_whatsapp_responses(text: str) -> list[dict]:
     seen_product_urls: set[str] = set()
 
     for block in blocks:
+        # Strip leading "1. " / "2. " numbering that format_product_results adds
+        block = re.sub(r'^\d+\.\s*', '', block)
         match = _IMAGE_MD_RE.search(block)
         if match:
             if pending_text:
