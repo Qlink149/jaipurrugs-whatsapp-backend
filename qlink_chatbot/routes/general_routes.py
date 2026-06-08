@@ -15,7 +15,8 @@ from qlink_chatbot.database.mongo_utils import (
     list_all_alerts,
     return_system_prompt,
     update_system_prompt,
-    agent_login
+    agent_login,
+    update_visitor_insights,
 )
 from qlink_chatbot.database.pinecone_utils import (
     chunk_text,
@@ -522,73 +523,73 @@ async def product_search(request: Request, payload: dict = Body(...)):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-# ── Visitor Insights endpoint ─────────────────────────────────────────────────
-
-_INSIGHT_COLORS = {
-    "red", "blue", "green", "yellow", "orange", "purple", "pink", "white",
-    "black", "grey", "gray", "brown", "beige", "ivory", "cream", "navy",
-    "teal", "turquoise", "gold", "silver", "rust", "coral", "indigo",
-    "maroon", "burgundy", "charcoal", "olive", "mustard", "peach", "lavender",
-}
+def _traffic_source(referrer: str) -> str:
+    referrer = (referrer or "").lower()
+    if not referrer:
+        return "Direct"
+    if "google." in referrer:
+        return "Google"
+    if "instagram." in referrer:
+        return "Instagram"
+    if "facebook." in referrer or "fb." in referrer:
+        return "Facebook"
+    if "bing." in referrer:
+        return "Bing"
+    if "jaipurrugs.com" in referrer:
+        return "Jaipur Rugs Website"
+    return "Referral"
 
 
 @general_router.post("/visitor-insights/{session_id}")
-def get_visitor_insights(session_id: str):
-    """Return aggregated insights for a web visitor identified by session_id (email)."""
+async def save_visitor_insights(session_id: str, request: Request, payload: dict = Body(...)):
+    """Save web visitor tracking data for the live-chat dashboard."""
     try:
+        from qlink_chatbot.utils.geo_utils import get_geo
+
         sid = session_id.lower().strip()
-        session = sessions_collection.find_one({"session_id": sid}, {"_id": 0})
-        if not session:
-            return JSONResponse({
-                "session_id": sid,
-                "found": False,
-                "total_messages": 0,
-                "total_searches": 0,
-                "top_colors": [],
-                "top_keywords": [],
-                "chat_history": [],
-                "previous_searches": [],
-            }, status_code=200)
+        forwarded = request.headers.get("x-forwarded-for", "")
+        client_ip = forwarded.split(",")[0].strip() if forwarded else (
+            request.headers.get("x-real-ip", "") or (request.client.host if request.client else "")
+        )
+        geo = await get_geo(client_ip)
+        referrer = payload.get("referrer") or ""
+        current_page = payload.get("current_page") or ""
+        event_type = payload.get("event_type") or "page_view"
 
-        chat_history = session.get("chat_history") or []
-        previous_searches = session.get("previous_searches") or []
+        insights = {
+            "visitor_id": payload.get("visitor_id") or "",
+            "user_name": payload.get("user_name") or "",
+            "current_page": current_page,
+            "current_page_title": payload.get("current_page_title") or "",
+            "referrer": referrer,
+            "traffic_source": payload.get("traffic_source") or _traffic_source(referrer),
+            "visit_count": int(payload.get("visit_count") or 1),
+            "chat_count": int(payload.get("chat_count") or 1),
+            "visitor_type": "Returning visitor" if int(payload.get("visit_count") or 1) > 1 else "First-time visitor",
+            "chat_started_at": payload.get("chat_started_at") or "",
+            "last_seen_at": payload.get("last_seen_at") or "",
+            "chat_duration_seconds": int(payload.get("chat_duration_seconds") or 0),
+            "ip_address": client_ip,
+            "city": geo.get("city") or "",
+            "country": geo.get("country") or "",
+            "country_code": geo.get("country_code") or payload.get("country_code") or "",
+            "currency": geo.get("currency") or "",
+            "user_agent": request.headers.get("user-agent", ""),
+        }
 
-        # Count messages by role
-        user_msgs = [m for m in chat_history if m.get("role") == "user"]
+        browsing_event = None
+        if event_type != "heartbeat" and current_page:
+            browsing_event = {
+                "event_type": event_type,
+                "page": current_page,
+                "title": payload.get("current_page_title") or "",
+                "referrer": referrer,
+                "traffic_source": insights["traffic_source"],
+                "at": payload.get("last_seen_at") or "",
+            }
 
-        # Extract colors from search filters
-        color_counter: dict[str, int] = {}
-        keyword_counter: dict[str, int] = {}
-        for search in previous_searches:
-            filters = search.get("filters") or {}
-            for color in (filters.get("colors") or []):
-                c = color.lower().strip()
-                if c:
-                    color_counter[c] = color_counter.get(c, 0) + 1
-            kw = (search.get("keyword") or "").strip().lower()
-            if kw:
-                keyword_counter[kw] = keyword_counter.get(kw, 0) + 1
-                for part in kw.split():
-                    if part in _INSIGHT_COLORS:
-                        color_counter[part] = color_counter.get(part, 0) + 1
-
-        top_colors = sorted(color_counter.items(), key=lambda x: -x[1])
-        top_keywords = sorted(keyword_counter.items(), key=lambda x: -x[1])
-
-        return JSONResponse({
-            "session_id": sid,
-            "found": True,
-            "user_name": session.get("user_name", ""),
-            "country_code": session.get("country_code", ""),
-            "last_active": str(session.get("updated_at", "")),
-            "total_messages": len(chat_history),
-            "user_messages": len(user_msgs),
-            "total_searches": len(previous_searches),
-            "top_colors": [{"color": c, "count": n} for c, n in top_colors[:5]],
-            "top_keywords": [{"keyword": k, "count": n} for k, n in top_keywords[:5]],
-            "chat_history": chat_history[-20:],
-            "previous_searches": previous_searches[-10:],
-        }, status_code=200)
+        update_visitor_insights(sid, insights=insights, browsing_event=browsing_event)
+        return JSONResponse({"success": True, "visitor_insights": insights}, status_code=200)
 
     except Exception as e:
         logger.error(f"visitor-insights error for {session_id}: {e}")

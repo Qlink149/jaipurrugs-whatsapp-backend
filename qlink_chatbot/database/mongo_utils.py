@@ -437,3 +437,26 @@ def save_inventory_cache(data: list):
         logger.error("Error saving inventory cache", extra={"error": e})
         raise e
 
+
+def update_visitor_insights(session_id: str, insights: dict, browsing_event: dict | None = None):
+    """Upsert visitor tracking data onto the session document."""
+    try:
+        now = datetime.utcnow()
+        set_fields = {f"visitor_insights.{k}": v for k, v in (insights or {}).items()}
+        set_fields["updated_at"] = now
+        update: dict = {"$set": set_fields}
+        if browsing_event:
+            update["$push"] = {
+                "visitor_insights.browsing_history": {
+                    "$each": [browsing_event],
+                    "$slice": -50,
+                }
+            }
+        sessions_collection.update_one(
+            {"session_id": session_id},
+            update,
+            upsert=True,
+        )
+    except Exception as e:
+        logger.error("Error updating visitor insights", extra={"error": str(e)})
+
