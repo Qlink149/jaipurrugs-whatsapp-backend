@@ -62,6 +62,9 @@ DEFAULT_CURRENCY = "INR"
 PRICE_CURRENCIES_RE = r"(inr|usd|eur|gbp|aud|chf|sgd|aed|₹|\$|£|€)"
 PRICE_AMOUNT_RE = r"([\d,]+(?:\.\d+)?)"
 
+# Matches "8x10", "8 x 10", "8X10", "8*10", "8 by 10", "8x10 ft"
+_SIZE_RE = re.compile(r'^(\d+)\s*(?:[xX*]|[bB][yY])\s*(\d+)(?:\s*ft\.?)?$')
+
 
 # ── Filter dataclass ─────────────────────────────────────────────────────────
 
@@ -117,9 +120,10 @@ class SearchFilters:
                 weight_filter = float(wm.group(1))
                 continue
 
-            # Size: "8x10"
-            if re.match(r'^\d+\s*x\s*\d+$', lower):
-                sizes.append(lower.replace(" ", ""))
+            # Size: "8x10", "8 x 10", "8X10", "8*10", "8 by 10", "8x10 ft"
+            size_norm = _normalize_size_input(lower)
+            if size_norm:
+                sizes.append(size_norm)
                 continue
 
             if lower in COMMON_COLORS:
@@ -206,7 +210,7 @@ class SearchFilters:
         return cls(
             colors=[c.lower().strip() for c in (colors or []) if c],
             shapes=[s.lower().strip() for s in (shapes or []) if s],
-            sizes=sizes or [],
+            sizes=[_normalize_size_input(s) or s.lower().strip() for s in (sizes or []) if s],
             materials=[m.lower().strip() for m in (materials or []) if m],
             constructions=constructions or [],
             styles=[
@@ -412,6 +416,18 @@ async def _mongo_search(filters: SearchFilters, currency: str, currency_field: s
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _normalize_size_input(text: str) -> str:
+    """Normalize any size variant to canonical WxH form.
+
+    Accepted inputs: "8x10", "8 x 10", "8X10", "8*10", "8 by 10", "8x10 ft"
+    Returns "" if the text is not a recognisable size expression.
+    """
+    m = _SIZE_RE.match(text.strip())
+    if m:
+        return f"{m.group(1)}x{m.group(2)}"
+    return ""
+
+
 def _extract_colors(text: str) -> tuple[list[str], str]:
     extracted = []
     residual = text
@@ -586,7 +602,13 @@ def _build_query(
         })
 
     if color_field and colors:
-        q[color_field] = {"$regex": "|".join(re.escape(c) for c in colors), "$options": "i"}
+        if len(colors) == 1:
+            q[color_field] = {"$regex": re.escape(colors[0]), "$options": "i"}
+        else:
+            # All requested colors must be present — AND, not OR
+            and_clauses.extend(
+                {color_field: {"$regex": re.escape(c), "$options": "i"}} for c in colors
+            )
     if size_field and sizes:
         q[size_field] = {"$regex": "|".join(re.escape(s) for s in sizes), "$options": "i"}
     if material_field and materials:
@@ -594,7 +616,13 @@ def _build_query(
     if constructions:
         q["search.construction"] = {"$regex": "|".join(re.escape(c) for c in constructions), "$options": "i"}
     if styles:
-        q["search.style"] = {"$regex": "|".join(re.escape(s) for s in styles), "$options": "i"}
+        if len(styles) == 1:
+            q["search.style"] = {"$regex": re.escape(styles[0]), "$options": "i"}
+        else:
+            # All styles must match — AND, not OR
+            and_clauses.extend(
+                {"search.style": {"$regex": re.escape(s), "$options": "i"}} for s in styles
+            )
     if shapes:
         q["search.shape"] = {"$regex": "|".join(re.escape(s) for s in shapes), "$options": "i"}
     if price_filter:
@@ -673,10 +701,15 @@ def _top_color_pct(color_map: dict, requested: list[str]) -> float:
 
 
 def _weight_ok(weight, ceiling: float) -> bool:
+    """Return True only if weight is a valid number and does not exceed ceiling.
+
+    Products with missing/null weight are excluded when the user sets an explicit
+    weight limit (returning True here would leak unweighed products into results).
+    """
     try:
         return float(weight) <= ceiling
     except (TypeError, ValueError):
-        return True
+        return False
 
 
 def _product_url(product_url: str, barcode: str) -> str:

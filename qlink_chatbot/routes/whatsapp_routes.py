@@ -4,7 +4,6 @@ import re
 from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, Response
 
-from qlink_chatbot.agent.chat_agent import chat_agent
 from qlink_chatbot.database.mongo_utils import (
     create_session,
     get_session_by_id,
@@ -19,9 +18,18 @@ from qlink_chatbot.whatsapp_functions.send_typing_indicator import (
     send_typing_indicator,
     typing_indicator_loop,
 )
+from qlink_chatbot.services.message_service import handle_user_message, WHATSAPP_COLLECTION
+# Renderer functions imported here so existing imports from this module still resolve.
+from qlink_chatbot.renderers.whatsapp_renderer import (
+    _build_whatsapp_responses,
+    _has_product_send,
+    _clean_for_whatsapp,
+    _extract_cta,
+    _extract_search_cta,
+)
 
 whatsapp_router = APIRouter()
-WHATSAPP_COLLECTION_NAME = "users_whatsapp"
+WHATSAPP_COLLECTION_NAME = WHATSAPP_COLLECTION  # alias kept for any internal references
 
 _IMAGE_NOT_SUPPORTED_RESPONSE = (
     "I'm sorry, I'm not able to identify or process images at this time.\n\n"
@@ -31,141 +39,8 @@ _IMAGE_NOT_SUPPORTED_RESPONSE = (
 )
 _MEDIA_SENTINEL = "__MEDIA_MESSAGE__"
 
-_IMAGE_MD_RE = re.compile(r'!\[.*?\]\((https?://\S+?)\)')
 _MD_LINK_RE = re.compile(r'\[([^\]]+)\]\((https?://[^\)]+)\)')
 
-
-def _extract_cta(caption: str) -> tuple[str, str | None]:
-    """Pull the first [View Product](...) markdown link out of caption.
-
-    Returns (cleaned_caption, product_url) or (caption, None).
-    """
-    for match in _MD_LINK_RE.finditer(caption):
-        label, url = match.group(1), match.group(2)
-        if "view product" in label.lower() or "jaipurrugs.com/in/rugs" in url:
-            cleaned = _MD_LINK_RE.sub("", caption, count=1).strip()
-            cleaned = re.sub(r'(?m)^\s*[-·•]\s*$', '', cleaned)
-            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
-            return cleaned, url
-    return caption, None
-
-
-def _extract_search_cta(text: str) -> tuple[str, str | None, str | None]:
-    """Pull the first search/browse markdown link out of a text block.
-
-    Returns (cleaned_text, search_url, button_label) or (text, None, None).
-    """
-    for match in _MD_LINK_RE.finditer(text):
-        label, url = match.group(1), match.group(2)
-        if "search" in label.lower() or "browse" in label.lower() or "/search" in url:
-            cleaned = _MD_LINK_RE.sub("", text, count=1).strip()
-            cleaned = re.sub(r'(?m)^\s*[-·•]\s*$', '', cleaned)
-            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
-            # strip emoji from label for button_text
-            btn_label = re.sub(r'[^\w\s]', '', label).strip() or "Search More Rugs"
-            return cleaned, url, btn_label
-    return text, None, None
-
-
-def _clean_for_whatsapp(text: str) -> str:
-    """Convert markdown formatting to WhatsApp-compatible text and strip artifacts."""
-    # Convert **bold** → *bold* (WhatsApp uses single asterisk for bold)
-    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
-    # Remove lines that are only asterisks or underscores (stray markers)
-    text = re.sub(r'(?m)^\s*[\*_]{1,3}\s*$', '', text)
-    # Remove trailing stray asterisks at end of string
-    text = re.sub(r'[\*_]+\s*$', '', text)
-    # Collapse 3+ blank lines into 2
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
-
-
-def _build_whatsapp_responses(text: str) -> list[dict]:
-    """Split bot text into WhatsApp messages.
-
-    Blocks with an image + View Product URL become interactive_cta messages
-    (real CTA button). Blocks without an image are batched into text messages.
-    """
-    blocks = [b.strip() for b in re.split(r'\n\n+', text.strip()) if b.strip()]
-    responses: list[dict] = []
-    pending_text: list[str] = []
-    deferred_search_cta: dict | None = None
-    seen_product_urls: set[str] = set()
-
-    for block in blocks:
-        match = _IMAGE_MD_RE.search(block)
-        if match:
-            if pending_text:
-                responses.append({"type": "text", "text": "\n\n".join(pending_text)})
-                pending_text = []
-            image_url = match.group(1)
-            caption = _IMAGE_MD_RE.sub("", block)
-            caption = re.sub(r'(?m)^\s*[-·•]\s*$', '', caption)
-            caption = re.sub(r'\n\s*[-·•]\s*$', '', caption).strip()
-            caption = _clean_for_whatsapp(caption)
-            caption, product_url = _extract_cta(caption)
-            # clean again — _extract_cta can leave stray * markers or empty bullets
-            caption = re.sub(r'(?m)^\s*[-·•·]\s*[\*_]*\s*$', '', caption)
-            caption = _clean_for_whatsapp(caption)
-            if product_url and product_url not in seen_product_urls:
-                seen_product_urls.add(product_url)
-                # Merge image + View Product button into ONE interactive message
-                # so image and button always arrive together in correct order
-                responses.append({
-                    "type": "interactive_cta",
-                    "image_url": image_url,
-                    "button_url": product_url,
-                    "caption": caption or "Tap below to view this rug on Jaipur Rugs.",
-                    "button_text": "View Product",
-                })
-            else:
-                responses.append({"type": "image", "image_url": image_url, "caption": caption})
-        else:
-            cleaned, search_url, btn_label = _extract_search_cta(block)
-            if search_url:
-                if cleaned:
-                    pending_text.append(cleaned)
-                deferred_search_cta = {
-                    "type": "interactive_cta",
-                    "button_url": search_url,
-                    "caption": "Tap below to browse more rugs.",
-                    "button_text": btn_label,
-                }
-            else:
-                text = _clean_for_whatsapp(block)
-                text, product_url = _extract_cta(text)
-                if product_url and product_url not in seen_product_urls:
-                    if pending_text:
-                        responses.append({"type": "text", "text": "\n\n".join(pending_text)})
-                        pending_text = []
-                    seen_product_urls.add(product_url)
-                    responses.append({
-                        "type": "interactive_cta",
-                        "button_url": product_url,
-                        "caption": text or "Tap below to view this rug on Jaipur Rugs.",
-                        "button_text": "View Product",
-                    })
-                else:
-                    # Strip any remaining markdown links to plain URLs (WhatsApp doesn't render [text](url))
-                    text = re.sub(r'\[([^\]]+)\]\((https?://[^\)]+)\)', r'\2', text)
-                    pending_text.append(text)
-
-    if pending_text:
-        responses.append({"type": "text", "text": "\n\n".join(pending_text)})
-
-    if deferred_search_cta:
-        responses.append(deferred_search_cta)
-
-    return responses or [{"type": "text", "text": text}]
-
-
-def _has_product_send(responses: list[dict]) -> bool:
-    product_response_types = {"image", "interactive_cta", "product_template", "text_with_image"}
-    return any(
-        isinstance(response, dict)
-        and response.get("type") in product_response_types
-        for response in responses
-    )
 
 
 def _extract_event(request_data: dict) -> dict:
@@ -312,31 +187,34 @@ async def _process_message(request_data: dict) -> None:
             create_session(session_id=session_id, country_code=phone_country_code,
                            name=whatsapp_username, is_ai=True,
                            collection_name=WHATSAPP_COLLECTION_NAME)
-            session = {"chat_history": [], "country_code": phone_country_code}
+            session = {"chat_history": [], "country_code": phone_country_code, "is_ai": True}
         elif whatsapp_username and whatsapp_username != session.get("user_name", ""):
             save_user_name(session_id=session_id, name=whatsapp_username,
                            collection_name=WHATSAPP_COLLECTION_NAME)
 
-        save_message(session_id=session_id, role="user", content=user_text,
-                     collection_name=WHATSAPP_COLLECTION_NAME)
-
         if not session.get("is_ai", True):
+            # Human agent active: still persist the user message but skip AI
+            save_message(session_id=session_id, role="user", content=user_text,
+                         collection_name=WHATSAPP_COLLECTION_NAME)
             logger.info("Human agent active — skipping AI response",
                         extra={"phone_number": phone_number})
             return
 
+        resolved_country = session.get("country_code", "") or phone_country_code
+        detected_currency = currency_for_country(resolved_country or phone_number)
+
         stop_typing = asyncio.Event()
         typing_task = asyncio.create_task(typing_indicator_loop(message_id, stop_typing))
-        detected_currency = currency_for_country(session.get("country_code", "") or phone_number)
         try:
-            bot_text = await chat_agent(
-                chat_history=session.get("chat_history", []),
-                user_message=user_text,
+            # Unified service: logs, saves user msg, calls AI, saves assistant msg
+            bot_text = await handle_user_message(
+                channel="whatsapp",
                 session_id=session_id,
-                country_code=session.get("country_code", "") or phone_country_code,
+                user_text=user_text,
+                country_code=resolved_country,
+                detected_currency=detected_currency or "INR",
                 client_ip="",
                 collection_name=WHATSAPP_COLLECTION_NAME,
-                detected_currency=detected_currency,
             )
         finally:
             stop_typing.set()
@@ -345,10 +223,6 @@ async def _process_message(request_data: dict) -> None:
                 await typing_task
             except asyncio.CancelledError:
                 pass
-
-        bot_text = bot_text or "Sorry, I could not generate a response right now."
-        save_message(session_id=session_id, role="assistant", content=bot_text,
-                     collection_name=WHATSAPP_COLLECTION_NAME)
 
         responses = _build_whatsapp_responses(bot_text)
         if _has_product_send(responses):

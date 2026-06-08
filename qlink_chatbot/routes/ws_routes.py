@@ -5,7 +5,6 @@ import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pymongo import MongoClient
 
-from qlink_chatbot.agent.chat_agent import chat_agent
 from qlink_chatbot.agent.summariser_agent import summariser_agent
 from qlink_chatbot.database.mongo_utils import (
     create_session,
@@ -17,6 +16,8 @@ from qlink_chatbot.database.mongo_utils import (
 from qlink_chatbot.utils.geo_utils import get_geo, currency_for_country
 from qlink_chatbot.database.pinecone_utils import store_vector_summary
 from qlink_chatbot.utils.logger_config import logger
+from qlink_chatbot.services.message_service import handle_user_message, WEB_COLLECTION
+from qlink_chatbot.renderers.web_renderer import render_web_response
 
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
@@ -89,49 +90,47 @@ async def user_ws(websocket: WebSocket, session_id: str, country_code: str, name
 
             message = {
                 "type": "message",
-                "from": "user", 
-                "content": msg.get("content")
+                "from": "user",
+                "content": msg.get("content"),
             }
-            save_message(session_id, "user", message["content"])
 
+            # Fetch session each turn to pick up live is_ai toggle from agents/dashboard.
             session = get_session_by_id(session_id=session_id)
             is_ai = session.get("is_ai", False)
             agents = active_connections[session_id]["agents"]
 
             if is_ai:
-                # Assistant starts typing
+                # Notify agents of user message and start typing indicator
                 for a in agents:
                     await a.send_json(message)
                     await a.send_json({"type": "typing", "from": "assistant", "is_typing": True})
                 await websocket.send_json({"type": "typing", "from": "assistant", "is_typing": True})
-                
-                detected_currency = currency_for_country(resolved_country) or geo.get("currency")
-                response = await chat_agent(
-                    chat_history=session.get("chat_history", []),
-                    user_message=message["content"],
+
+                detected_currency = currency_for_country(resolved_country) or geo.get("currency", "")
+
+                # Unified service: logs, saves msgs, calls AI, returns raw text
+                response_text = await handle_user_message(
+                    channel="web",
                     session_id=session_id,
+                    user_text=message["content"],
                     country_code=resolved_country,
+                    detected_currency=detected_currency or "INR",
                     client_ip=client_ip,
-                    detected_currency=detected_currency,
+                    collection_name=WEB_COLLECTION,
                 )
 
-                # Assistant stops typing
                 for a in agents:
                     await a.send_json({"type": "typing", "from": "assistant", "is_typing": False})
                 await websocket.send_json({"type": "typing", "from": "assistant", "is_typing": False})
 
-                ai_response = {
-                    "type": "message",
-                    "from": "assistant", 
-                    "content": response or "Error generating response."
-                }
-                save_message(session_id, "assistant", ai_response["content"])
-
+                ai_response = render_web_response(response_text)
                 await websocket.send_json(ai_response)
                 for a in agents:
                     await a.send_json(ai_response)
 
             else:
+                # Human agent active: save user message then forward to agent sockets
+                save_message(session_id, "user", message["content"], WEB_COLLECTION)
                 for a in agents:
                     await a.send_json(message)
 
